@@ -66,3 +66,208 @@ func TestBuildSnapshot_MagicUserSpellFields(t *testing.T) {
 		t.Errorf("fighter KnownSpells should be empty, got %v", fighterView.KnownSpells)
 	}
 }
+
+func TestBuildSnapshot_WithCombat(t *testing.T) {
+	gs := NewGameState("s1")
+
+	party, _ := NewParty([]PartyRequest{
+		{Name: "Fighter", Class: ClassFighter},
+	})
+	gs.Party = party
+
+	room := &Room{ID: "r1", Name: "Dungeon", X: 0, Y: 0}
+	gs.AddRoom(room)
+	party.MoveAllToRoom("r1")
+
+	gs.AddMonster(&Monster{ID: "m1", Name: "Goblin", HP: 10, MaxHP: 10, RoomID: "r1", IsAlive: true})
+	roomID := "r1"
+	gs.AddItem(&Item{ID: "i1", Name: "Sword", Type: ItemWeapon, Damage: 3, Range: RangeMelee, Rarity: "common", RoomID: &roomID})
+	gs.AddTrap(&Trap{ID: "t1", RoomID: "r1", Description: "Spike trap", IsDiscovered: true, Difficulty: 15})
+
+	gs.Mode = ModeCombat
+	cs := newTestCombatState()
+	cs.Combatants = []*Combatant{
+		{ID: party.Characters[0].ID, Name: "Fighter", IsPlayerChar: true, IsAlive: true, HP: 30, MaxHP: 30, GridX: 0, GridY: 0},
+		{ID: "m1", Name: "Goblin", IsPlayerChar: false, IsAlive: true, HP: 10, MaxHP: 10, GridX: 5, GridY: 5},
+	}
+	cs.PlaceOnGrid(cs.Combatants[0], 0, 0)
+	cs.PlaceOnGrid(cs.Combatants[1], 5, 5)
+	cs.RoundNumber = 1
+	gs.Combat = cs
+
+	snap := gs.BuildSnapshot()
+
+	if snap.Mode != "combat" {
+		t.Errorf("Mode = %q, want combat", snap.Mode)
+	}
+	if snap.Party == nil || len(snap.Party.Characters) != 1 {
+		t.Error("party should have 1 character")
+	}
+	if snap.CurrentRoom == nil || snap.CurrentRoom.Name != "Dungeon" {
+		t.Error("current room should be Dungeon")
+	}
+	if len(snap.Monsters) != 1 {
+		t.Errorf("monster count = %d, want 1", len(snap.Monsters))
+	}
+	if len(snap.RoomItems) != 1 {
+		t.Errorf("item count = %d, want 1", len(snap.RoomItems))
+	}
+	if len(snap.RoomTraps) != 1 {
+		t.Errorf("trap count = %d, want 1 (discovered)", len(snap.RoomTraps))
+	}
+	if snap.Combat == nil {
+		t.Fatal("combat view should be set")
+	}
+	if len(snap.Combat.Combatants) != 2 {
+		t.Errorf("combatant count = %d, want 2", len(snap.Combat.Combatants))
+	}
+}
+
+func TestBuildSnapshot_UndiscoveredTrapHidden(t *testing.T) {
+	gs := NewGameState("s1")
+	party, _ := NewParty([]PartyRequest{{Name: "Fighter", Class: ClassFighter}})
+	gs.Party = party
+	room := &Room{ID: "r1", X: 0, Y: 0}
+	gs.AddRoom(room)
+	party.MoveAllToRoom("r1")
+	gs.AddTrap(&Trap{ID: "t1", RoomID: "r1", IsDiscovered: false})
+
+	snap := gs.BuildSnapshot()
+	if len(snap.RoomTraps) != 0 {
+		t.Error("undiscovered trap should not appear in snapshot")
+	}
+}
+
+func TestBuildMonsterView_ThreatLevels(t *testing.T) {
+	tests := []struct {
+		maxHP int
+		want  string
+	}{
+		{5, "trivial"},
+		{8, "trivial"},
+		{15, "normal"},
+		{20, "dangerous"},
+		{30, "deadly"},
+		{50, "deadly"},
+	}
+
+	for _, tc := range tests {
+		m := &Monster{ID: "m1", MaxHP: tc.maxHP, IsAlive: true}
+		mv := buildMonsterView(m)
+		if mv.Threat != tc.want {
+			t.Errorf("MaxHP=%d: threat=%q, want %q", tc.maxHP, mv.Threat, tc.want)
+		}
+	}
+}
+
+func TestBuildItemView(t *testing.T) {
+	item := &Item{
+		ID:               "i1",
+		Name:             "Magic Sword",
+		Description:      "A glowing blade",
+		Type:             ItemWeapon,
+		Damage:           5,
+		Armor:            2,
+		Healing:          1,
+		Range:            RangeMelee,
+		Rarity:           "rare",
+		ClassRestriction: []CharacterClass{ClassFighter},
+		IsEquipped:       true,
+	}
+
+	iv := buildItemView(item)
+	if iv.Name != "Magic Sword" {
+		t.Errorf("Name = %q", iv.Name)
+	}
+	if iv.Damage != 5 {
+		t.Errorf("Damage = %d, want 5", iv.Damage)
+	}
+	if iv.Armor != 2 {
+		t.Errorf("Armor = %d, want 2", iv.Armor)
+	}
+	if iv.Healing != 1 {
+		t.Errorf("Healing = %d, want 1", iv.Healing)
+	}
+	if iv.Range != "melee" {
+		t.Errorf("Range = %q, want melee", iv.Range)
+	}
+	if len(iv.ClassRestriction) != 1 || iv.ClassRestriction[0] != "fighter" {
+		t.Errorf("ClassRestriction = %v", iv.ClassRestriction)
+	}
+	if !iv.IsEquipped {
+		t.Error("should be equipped")
+	}
+}
+
+func TestBuildItemView_ZeroValues(t *testing.T) {
+	item := &Item{ID: "i1", Name: "Key", Type: ItemKey, Rarity: "common"}
+	iv := buildItemView(item)
+	if iv.Damage != 0 || iv.Armor != 0 || iv.Healing != 0 {
+		t.Error("zero values should stay zero")
+	}
+	if iv.Range != "" {
+		t.Errorf("Range = %q, want empty", iv.Range)
+	}
+	if iv.ClassRestriction != nil {
+		t.Error("no restriction should be nil")
+	}
+}
+
+func TestBuildTrapView(t *testing.T) {
+	trap := &Trap{ID: "t1", Description: "Spike trap", IsDisarmed: true, Difficulty: 15}
+	tv := buildTrapView(trap)
+	if tv.Description != "Spike trap" {
+		t.Errorf("Description = %q", tv.Description)
+	}
+	if !tv.IsDisarmed {
+		t.Error("should be disarmed")
+	}
+	if tv.Difficulty != 15 {
+		t.Errorf("Difficulty = %d, want 15", tv.Difficulty)
+	}
+}
+
+func TestBuildCombatView(t *testing.T) {
+	cs := newTestCombatState()
+	cs.RoundNumber = 3
+	cs.CurrentTurnIdx = 1
+
+	c1 := &Combatant{ID: "p1", Name: "Hero", IsPlayerChar: true, IsAlive: true, HP: 20, MaxHP: 30, GridX: 0, GridY: 0}
+	c2 := &Combatant{ID: "m1", Name: "Goblin", IsPlayerChar: false, IsAlive: true, HP: 8, MaxHP: 10, GridX: 5, GridY: 5}
+	cs.Combatants = append(cs.Combatants, c1, c2)
+	cs.PlaceOnGrid(c1, 0, 0)
+	cs.PlaceOnGrid(c2, 5, 5)
+
+	cv := buildCombatView(cs)
+	if cv.RoundNumber != 3 {
+		t.Errorf("RoundNumber = %d, want 3", cv.RoundNumber)
+	}
+	if cv.CurrentTurnIdx != 1 {
+		t.Errorf("CurrentTurnIdx = %d, want 1", cv.CurrentTurnIdx)
+	}
+	if !cv.IsActive {
+		t.Error("should be active")
+	}
+	if len(cv.Combatants) != 2 {
+		t.Errorf("combatant count = %d, want 2", len(cv.Combatants))
+	}
+	if cv.Grid[0][0] != "p1" {
+		t.Errorf("grid[0][0] = %q, want p1", cv.Grid[0][0])
+	}
+	if cv.Grid[5][5] != "m1" {
+		t.Errorf("grid[5][5] = %q, want m1", cv.Grid[5][5])
+	}
+	if cv.Grid[2][2] != "" {
+		t.Errorf("empty cell = %q, want empty", cv.Grid[2][2])
+	}
+}
+
+func TestBuildCombatView_BlockedCell(t *testing.T) {
+	cs := newTestCombatState()
+	cs.Grid[3][3].IsBlocked = true
+
+	cv := buildCombatView(cs)
+	if cv.Grid[3][3] != "blocked" {
+		t.Errorf("blocked cell = %q, want 'blocked'", cv.Grid[3][3])
+	}
+}

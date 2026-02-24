@@ -3,16 +3,19 @@ package game
 // --- Frontend View Types ---
 
 type CharacterView struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Class        string `json:"class"`
-	HP           int    `json:"hp"`
-	MaxHP        int    `json:"maxHp"`
-	Strength     int    `json:"strength"`
-	Dexterity    int    `json:"dexterity"`
-	Intelligence int    `json:"intelligence"`
-	IsAlive      bool   `json:"isAlive"`
-	Status       string `json:"status"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Class         string   `json:"class"`
+	HP            int      `json:"hp"`
+	MaxHP         int      `json:"maxHp"`
+	Strength      int      `json:"strength"`
+	Dexterity     int      `json:"dexterity"`
+	Intelligence  int      `json:"intelligence"`
+	SpellSlots    int      `json:"spellSlots"`
+	MaxSpellSlots int      `json:"maxSpellSlots"`
+	KnownSpells   []string `json:"knownSpells,omitempty"`
+	IsAlive       bool     `json:"isAlive"`
+	Status        string   `json:"status"`
 }
 
 type PartyView struct {
@@ -176,16 +179,19 @@ func buildPartyView(p *Party) *PartyView {
 
 func buildCharacterView(c *Character) *CharacterView {
 	return &CharacterView{
-		ID:           c.ID,
-		Name:         c.Name,
-		Class:        string(c.Class),
-		HP:           c.HP,
-		MaxHP:        c.MaxHP,
-		Strength:     c.Strength,
-		Dexterity:    c.Dexterity,
-		Intelligence: c.Intelligence,
-		IsAlive:      c.IsAlive,
-		Status:       c.HealthStatus(),
+		ID:            c.ID,
+		Name:          c.Name,
+		Class:         string(c.Class),
+		HP:            c.HP,
+		MaxHP:         c.MaxHP,
+		Strength:      c.Strength,
+		Dexterity:     c.Dexterity,
+		Intelligence:  c.Intelligence,
+		SpellSlots:    c.SpellSlots,
+		MaxSpellSlots: c.MaxSpellSlots,
+		KnownSpells:   c.KnownSpells,
+		IsAlive:       c.IsAlive,
+		Status:        c.HealthStatus(),
 	}
 }
 

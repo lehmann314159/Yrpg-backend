@@ -102,6 +102,10 @@ func (s *Server) handleNewGame(arguments map[string]interface{}) (*ToolResult, e
 		stats := game.ClassStatsTable[c.Class]
 		sb.WriteString(fmt.Sprintf("  %s the %s — HP: %d, STR: %d, DEX: %d, INT: %d, Move: %d\n",
 			c.Name, c.Class, c.HP, c.Strength, c.Dexterity, c.Intelligence, stats.MovementRange))
+		if c.Class == game.ClassMagicUser && c.MaxSpellSlots > 0 {
+			sb.WriteString(fmt.Sprintf("    Spell Slots: %d/%d, Spells: %s\n",
+				c.SpellSlots, c.MaxSpellSlots, strings.Join(c.KnownSpells, ", ")))
+		}
 	}
 	sb.WriteString(fmt.Sprintf("\nFormation (front to back): %s\n",
 		formatFormation(party)))
@@ -506,6 +510,19 @@ func (s *Server) useScroll(caster *game.Character, item *game.Item, targetID str
 	if total >= dc {
 		// Success — apply effect
 		sb.WriteString(s.applyScrollEffect(caster, item, targetID))
+
+		// Magic users permanently learn spells from successfully cast scrolls
+		if caster.Class == game.ClassMagicUser && item.ScrollEffect != "" {
+			if game.LearnSpell(caster, item.ScrollEffect) {
+				spellDef := game.SpellRegistry[item.ScrollEffect]
+				spellName := item.ScrollEffect
+				if spellDef != nil {
+					spellName = spellDef.Name
+				}
+				sb.WriteString(fmt.Sprintf("\n%s learned %s!", caster.Name, spellName))
+			}
+		}
+
 		s.logEvent("item", "scroll_success", caster.ID, string(caster.Class), "", map[string]interface{}{
 			"scroll": item.ScrollEffect, "roll": roll, "dc": dc,
 		})
@@ -971,6 +988,14 @@ func (s *Server) handleStats() (*ToolResult, error) {
 		sb.WriteString(fmt.Sprintf("  Movement: %d cells  Initiative bonus: %+d\n",
 			c.GetMovementRange(), c.GetInitiativeBonus()))
 
+		// Spell slots (magic_user only)
+		if c.Class == game.ClassMagicUser && c.MaxSpellSlots > 0 {
+			sb.WriteString(fmt.Sprintf("  Spell Slots: %d/%d\n", c.SpellSlots, c.MaxSpellSlots))
+			if len(c.KnownSpells) > 0 {
+				sb.WriteString(fmt.Sprintf("  Known Spells: %s\n", strings.Join(c.KnownSpells, ", ")))
+			}
+		}
+
 		// Equipment
 		if c.EquippedWeaponID != nil {
 			weapon := s.state.Items[*c.EquippedWeaponID]
@@ -1013,6 +1038,144 @@ func (s *Server) handleMap() (*ToolResult, error) {
 
 	mapStr := s.state.RenderMap(gridSize())
 	return s.textResult(mapStr), nil
+}
+
+// --- Spell Casting (Exploration) ---
+
+// handleCastSpell casts a known spell outside of combat
+func (s *Server) handleCastSpell(charID, spellID, targetID string) (*ToolResult, error) {
+	if err := s.requireExploration(); err != nil {
+		return err, nil
+	}
+
+	char, errResult := s.resolveCharacter(charID)
+	if errResult != nil {
+		return errResult, nil
+	}
+
+	ok, reason := game.CanCast(char, spellID)
+	if !ok {
+		return s.textResult(reason), nil
+	}
+
+	spell := game.SpellRegistry[spellID]
+	if spell.CombatOnly {
+		return s.textResult(fmt.Sprintf("%s can only be cast during combat.", spell.Name)), nil
+	}
+
+	// Spend the slot
+	game.SpendSlot(char)
+
+	// Create a synthetic scroll item to reuse applyScrollEffect
+	syntheticItem := &game.Item{
+		Name:         spell.Name,
+		ScrollEffect: spellID,
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%s casts %s! (Slots: %d/%d)\n",
+		char.Name, spell.Name, char.SpellSlots, char.MaxSpellSlots))
+	sb.WriteString(s.applyScrollEffect(char, syntheticItem, targetID))
+
+	s.logEvent("spell", "spell_cast", charID, string(char.Class), targetID, map[string]interface{}{
+		"spell": spellID, "slots_remaining": char.SpellSlots,
+	})
+	s.incrementStat(charID, "spells_cast", 1)
+
+	return s.textResult(sb.String()), nil
+}
+
+// --- Rest Mechanic ---
+
+// handleRest lets the party rest in a cleared room to recover HP and spell slots
+func (s *Server) handleRest() (*ToolResult, error) {
+	if err := s.requireActiveGame(); err != nil {
+		return err, nil
+	}
+
+	ok, reason := game.CanRest(s.state)
+	if !ok {
+		return s.textResult(reason), nil
+	}
+
+	s.state.ResetTurnContext()
+
+	var sb strings.Builder
+	sb.WriteString("=== REST ===\n\n")
+
+	// Heal all alive characters
+	sb.WriteString("Recovery:\n")
+	for _, c := range s.state.Party.Characters {
+		if !c.IsAlive {
+			continue
+		}
+		healing := game.CalcRestHealing(c)
+		oldHP := c.HP
+		c.Heal(healing)
+		healed := c.HP - oldHP
+		sb.WriteString(fmt.Sprintf("  %s recovers %d HP. (HP: %d/%d)\n", c.Name, healed, c.HP, c.MaxHP))
+
+		// Recharge spell slots for magic users
+		if c.Class == game.ClassMagicUser && c.MaxSpellSlots > 0 {
+			game.RechargeSlots(c)
+			sb.WriteString(fmt.Sprintf("  %s's spell slots recharged. (Slots: %d/%d)\n",
+				c.Name, c.SpellSlots, c.MaxSpellSlots))
+		}
+	}
+
+	// Calculate ambush chance
+	room := s.state.GetCurrentRoom()
+	roomDepth := room.X + room.Y // Manhattan distance from entrance
+	hasThief := s.state.Party.HasClass(game.ClassThief)
+	// Thief must be alive to stand watch
+	hasThiefWatch := false
+	if hasThief {
+		thief := s.state.Party.GetByClass(game.ClassThief)
+		if thief != nil && thief.IsAlive {
+			hasThiefWatch = true
+		}
+	}
+
+	ambushChance := game.CalcAmbushChance(roomDepth, hasThiefWatch)
+
+	if hasThiefWatch {
+		thief := s.state.Party.GetByClass(game.ClassThief)
+		sb.WriteString(fmt.Sprintf("\n%s stands watch. (Ambush chance: %d%%)\n", thief.Name, ambushChance))
+	} else {
+		sb.WriteString(fmt.Sprintf("\nNo thief on watch. (Ambush chance: %d%%)\n", ambushChance))
+	}
+
+	// Roll for ambush
+	if game.RollAmbush(s.rng, ambushChance) {
+		sb.WriteString("\nYou are ambushed by wandering monsters!\n")
+
+		// Generate ambush monsters
+		monsters := s.generateAmbushMonsters(roomDepth, room.ID)
+		for _, m := range monsters {
+			s.state.AddMonster(m)
+		}
+
+		s.logEvent("combat", "ambush", "", "", "", map[string]interface{}{
+			"room_depth":    roomDepth,
+			"monster_count": len(monsters),
+			"thief_watch":   hasThiefWatch,
+		})
+
+		// Determine surprise round: monsters get surprise if no thief on watch
+		surpriseRound := !hasThiefWatch
+
+		// Enter combat
+		combatMsg := s.enterAmbushCombat(room.ID, monsters, surpriseRound)
+		sb.WriteString(combatMsg)
+	} else {
+		sb.WriteString("\nRest complete. No disturbances.\n")
+		s.logEvent("interaction", "rest", "", "", "", map[string]interface{}{
+			"room_depth":  roomDepth,
+			"thief_watch": hasThiefWatch,
+		})
+	}
+
+	return s.textResult(sb.String()), nil
 }
 
 // --- Helpers ---

@@ -30,6 +30,9 @@ type Character struct {
 	Strength         int            `json:"strength"`
 	Dexterity        int            `json:"dexterity"`
 	Intelligence     int            `json:"intelligence"`
+	SpellSlots       int            `json:"spell_slots"`
+	MaxSpellSlots    int            `json:"max_spell_slots"`
+	KnownSpells      []string       `json:"known_spells"`
 	CurrentRoomID    string         `json:"current_room_id"`
 	IsAlive          bool           `json:"is_alive"`
 	EquippedWeaponID *string        `json:"equipped_weapon_id,omitempty"`

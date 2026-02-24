@@ -393,6 +393,184 @@ func (s *Server) handleEndTurn(charID string) (*ToolResult, error) {
 	return s.textResult(sb.String()), nil
 }
 
+// --- Spell Casting (Combat) ---
+
+// handleCombatCastSpell casts a known spell during combat
+func (s *Server) handleCombatCastSpell(charID, spellID, targetID string) (*ToolResult, error) {
+	if err := s.requireCombat(); err != nil {
+		return err, nil
+	}
+
+	combatant, errResult := s.requirePlayerTurn(charID)
+	if errResult != nil {
+		return errResult, nil
+	}
+
+	if combatant.HasActed {
+		return s.textResult(fmt.Sprintf("%s has already acted this turn.", combatant.Name)), nil
+	}
+
+	char, errResult := s.resolveCharacter(charID)
+	if errResult != nil {
+		return errResult, nil
+	}
+
+	ok, reason := game.CanCast(char, spellID)
+	if !ok {
+		return s.textResult(reason), nil
+	}
+
+	spell := game.SpellRegistry[spellID]
+
+	// Spend the slot
+	game.SpendSlot(char)
+	combatant.HasActed = true
+
+	// Create a synthetic scroll item to reuse applyScrollEffect
+	syntheticItem := &game.Item{
+		Name:         spell.Name,
+		ScrollEffect: spellID,
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%s casts %s! (Slots: %d/%d)\n",
+		char.Name, spell.Name, char.SpellSlots, char.MaxSpellSlots))
+	sb.WriteString(s.applyScrollEffect(char, syntheticItem, targetID))
+
+	// Sync HP changes from heals to combatant
+	combatant.HP = char.HP
+
+	s.logEvent("spell", "combat_spell_cast", charID, string(char.Class), targetID, map[string]interface{}{
+		"spell": spellID, "slots_remaining": char.SpellSlots,
+	})
+	s.incrementStat(charID, "spells_cast", 1)
+
+	// Check combat end
+	msg := s.checkCombatEnd(&sb)
+	if msg != "" {
+		return s.textResult(sb.String()), nil
+	}
+
+	// Advance turn after action
+	sb.WriteString(s.advanceTurnAndRunMonsters())
+
+	return s.textResult(sb.String()), nil
+}
+
+// --- Ambush Combat ---
+
+// generateAmbushMonsters creates 1-3 monsters scaled to room depth for an ambush
+func (s *Server) generateAmbushMonsters(depth int, roomID string) []*game.Monster {
+	// Monster templates for ambush generation (subset of procgen templates)
+	type ambushTemplate struct {
+		Name        string
+		Description string
+		BaseHP      int
+		BaseDamage  int
+		BaseDex     int
+		MinDiff     int
+	}
+
+	templates := []ambushTemplate{
+		{Name: "Rat", Description: "A large, mangy rat with beady red eyes.", BaseHP: 5, BaseDamage: 2, BaseDex: 12, MinDiff: 0},
+		{Name: "Goblin", Description: "A small, green-skinned creature with a wicked grin.", BaseHP: 10, BaseDamage: 4, BaseDex: 12, MinDiff: 1},
+		{Name: "Skeleton", Description: "The animated bones of a long-dead warrior.", BaseHP: 15, BaseDamage: 5, BaseDex: 10, MinDiff: 2},
+		{Name: "Orc", Description: "A hulking brute with tusks and a massive club.", BaseHP: 25, BaseDamage: 8, BaseDex: 10, MinDiff: 3},
+		{Name: "Wraith", Description: "A shadowy figure that chills you to the bone.", BaseHP: 20, BaseDamage: 7, BaseDex: 16, MinDiff: 4},
+	}
+
+	// Filter eligible templates
+	eligible := make([]ambushTemplate, 0)
+	for _, t := range templates {
+		if t.MinDiff <= depth {
+			eligible = append(eligible, t)
+		}
+	}
+	if len(eligible) == 0 {
+		eligible = templates[:1] // fallback to rat
+	}
+
+	// 1-3 monsters based on depth
+	numMonsters := 1
+	if depth >= 4 && s.rng.Float32() < 0.4 {
+		numMonsters = 3
+	} else if depth >= 2 && s.rng.Float32() < 0.5 {
+		numMonsters = 2
+	}
+
+	scaleFactor := 1.0 + float64(depth)*0.15
+
+	monsters := make([]*game.Monster, 0, numMonsters)
+	for i := 0; i < numMonsters; i++ {
+		t := eligible[s.rng.Intn(len(eligible))]
+		m := &game.Monster{
+			ID:          fmt.Sprintf("ambush_%x", s.rng.Int63()),
+			Name:        t.Name,
+			Description: t.Description,
+			HP:          int(float64(t.BaseHP) * scaleFactor),
+			MaxHP:       int(float64(t.BaseHP) * scaleFactor),
+			Damage:      int(float64(t.BaseDamage) * scaleFactor),
+			Dexterity:   t.BaseDex,
+			RoomID:      roomID,
+			IsAlive:     true,
+		}
+		monsters = append(monsters, m)
+	}
+
+	return monsters
+}
+
+// enterAmbushCombat starts combat from an ambush with optional surprise round for monsters
+func (s *Server) enterAmbushCombat(roomID string, monsters []*game.Monster, surpriseRound bool) string {
+	// Use the existing InitCombat but with no sneak result (party didn't sneak)
+	cs := game.InitCombat(s.state.Party, monsters, roomID, nil, s.rng)
+	s.state.Combat = cs
+	s.state.Mode = game.ModeCombat
+	s.retreated = make(map[string]bool)
+
+	// If surprise round, reorder so all monsters go first
+	if surpriseRound {
+		playerCombatants := make([]*game.Combatant, 0)
+		enemyCombatants := make([]*game.Combatant, 0)
+		for _, c := range cs.Combatants {
+			if c.IsPlayerChar {
+				playerCombatants = append(playerCombatants, c)
+			} else {
+				enemyCombatants = append(enemyCombatants, c)
+			}
+		}
+		// Enemies first, then players
+		cs.Combatants = append(enemyCombatants, playerCombatants...)
+		cs.CurrentTurnIdx = 0
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\n=== AMBUSH COMBAT ===\n\n")
+	if surpriseRound {
+		sb.WriteString("The monsters catch you off guard! They get a surprise round!\n\n")
+	}
+
+	sb.WriteString("Initiative order:\n")
+	for _, c := range cs.Combatants {
+		side := "ALLY"
+		if !c.IsPlayerChar {
+			side = "ENEMY"
+		}
+		sb.WriteString(fmt.Sprintf("  %s [%s] — Init: %d, HP: %d/%d, Pos: (%d,%d)\n",
+			c.Name, side, c.Initiative, c.HP, c.MaxHP, c.GridX, c.GridY))
+	}
+
+	// Run monster turns if they go first (surprise round or normal initiative)
+	current := cs.GetCurrentCombatant()
+	if current != nil && !current.IsPlayerChar {
+		sb.WriteString(s.runMonsterTurns())
+	} else if current != nil {
+		sb.WriteString(fmt.Sprintf("\n%s's turn! Use combat tools to respond.\n", current.Name))
+	}
+
+	return sb.String()
+}
+
 // --- Combat helpers ---
 
 // enterCombat transitions from exploration to combat mode

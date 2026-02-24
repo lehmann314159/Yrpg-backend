@@ -59,7 +59,7 @@ func NewCharacter(name string, class CharacterClass) (*Character, error) {
 
 	stats := ClassStatsTable[class]
 
-	return &Character{
+	char := &Character{
 		ID:           generateID(),
 		Name:         name,
 		Class:        class,
@@ -70,7 +70,16 @@ func NewCharacter(name string, class CharacterClass) (*Character, error) {
 		Intelligence: stats.BaseIntelligence,
 		IsAlive:      true,
 		CreatedAt:    time.Now(),
-	}, nil
+	}
+
+	// Magic users get spell slots derived from intelligence and start with heal + fireball
+	if class == ClassMagicUser {
+		char.MaxSpellSlots = CalcMaxSlots(char.Intelligence)
+		char.SpellSlots = char.MaxSpellSlots
+		char.KnownSpells = []string{"heal", "fireball"}
+	}
+
+	return char, nil
 }
 
 // TakeDamage applies damage to a character

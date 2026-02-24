@@ -329,6 +329,39 @@ func (s *Server) ListTools() []Tool {
 			},
 		},
 
+		// Spell & Rest Tools
+		{
+			Name:        "cast_spell",
+			Description: "Cast a known spell outside combat (non-combat-only spells like heal, resurrect)",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"character_id": map[string]interface{}{"type": "string", "description": "ID of the magic_user casting the spell"},
+					"spell_id":     map[string]interface{}{"type": "string", "description": "Spell to cast (e.g. heal, resurrect)"},
+					"target_id":    map[string]interface{}{"type": "string", "description": "Target character ID (optional, defaults to self)"},
+				},
+				"required": []string{"character_id", "spell_id"},
+			},
+		},
+		{
+			Name:        "combat_cast_spell",
+			Description: "Cast a known spell during combat (any spell)",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"character_id": map[string]interface{}{"type": "string", "description": "ID of the magic_user casting the spell"},
+					"spell_id":     map[string]interface{}{"type": "string", "description": "Spell to cast"},
+					"target_id":    map[string]interface{}{"type": "string", "description": "Target ID (character for heals, enemy combatant for attacks)"},
+				},
+				"required": []string{"character_id", "spell_id"},
+			},
+		},
+		{
+			Name:        "rest",
+			Description: "Rest in a cleared room to recover HP and spell slots. Risk of ambush by wandering monsters.",
+			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+		},
+
 		// Combat Tools
 		{
 			Name:        "combat_status",
@@ -489,6 +522,26 @@ func (s *Server) CallTool(name string, arguments map[string]interface{}) (*ToolR
 			return nil, fmt.Errorf("session_id is required")
 		}
 		return s.handleLoadGame(sessionID)
+
+	// Spell & Rest tools
+	case "cast_spell":
+		charID, _ := arguments["character_id"].(string)
+		spellID, _ := arguments["spell_id"].(string)
+		targetID, _ := arguments["target_id"].(string)
+		if charID == "" || spellID == "" {
+			return nil, fmt.Errorf("character_id and spell_id are required")
+		}
+		return s.handleCastSpell(charID, spellID, targetID)
+	case "combat_cast_spell":
+		charID, _ := arguments["character_id"].(string)
+		spellID, _ := arguments["spell_id"].(string)
+		targetID, _ := arguments["target_id"].(string)
+		if charID == "" || spellID == "" {
+			return nil, fmt.Errorf("character_id and spell_id are required")
+		}
+		return s.handleCombatCastSpell(charID, spellID, targetID)
+	case "rest":
+		return s.handleRest()
 
 	// Combat tools
 	case "combat_status":

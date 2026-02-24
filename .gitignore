@@ -1,0 +1,7 @@
+# Binary
+yrpg-server
+
+# Database files
+*.db
+*.db-shm
+*.db-wal

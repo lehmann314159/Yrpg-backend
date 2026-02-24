@@ -2,9 +2,9 @@
 
 Reference plan: `../Yrpg-backend-plan.md`
 
-## Project Status: Code Complete — Ready for Testing
+## Project Status: Code Complete — Tested and Working
 
-Last updated: 2026-02-23
+Last updated: 2026-02-24
 
 ---
 
@@ -81,25 +81,48 @@ Event logging instrumented across: game_start, room_enter, victory, trap_detecte
 ## Phase 6: Polish & API Docs — NOT STARTED
 
 - Error handling is present throughout (graceful failures, input validation)
-- Dockerfile exists
 - No formal API documentation
 - No balance tuning config
 
 ---
 
-## Remaining Items (nice-to-have, not blocking testing)
+## Manual Test Results (2026-02-24)
+
+All 22 MCP tools verified working via curl against running server:
+
+| Feature | Result |
+|---------|--------|
+| `/health` | `{"status": "healthy"}` |
+| `new_game` (3 chars) | Party created, placed at entrance, session persisted to DB |
+| `look` | Room description, exits, items, traps displayed correctly |
+| `take` / `equip` | Item pickup, equip with class restrictions enforced |
+| `sneak` (scout) | Thief scouts ahead — reveals enemies, items, trap count |
+| `move` (room entry) | Auto sneak check, trap detection, combat entry sequence |
+| `disarm_trap` | Thief disarms with +6 bonus (Roll: 32 vs DC 13) |
+| `map` | ASCII dungeon map with explored/unexplored/adjacent cells |
+| `save_game` / `load_game` | Full state roundtrip, party restored correctly |
+| Combat: move, attack | Grid movement, melee attacks, hidden advantage |
+| Combat: defend | +4 AC stance applied |
+| Combat: flanking | Advantage triggered when attacking engaged target |
+| Monster AI | Monsters attack players, damage synced to characters |
+| Combat end | Auto-transition back to exploration after all enemies dead |
+| Event logging | 18 events across 12 types recorded in SQLite |
+| Stat accumulation | Per-character kills, damage, sneaks tracked correctly |
+
+---
+
+## Remaining Items (nice-to-have)
 
 ### 1. Potion combat effects — LOW PRIORITY
 - Strength/Dexterity/Defense potions exist as items but don't apply combat buffs
 - The buff system is in place — just needs potion-specific handlers in `useConsumable`
-- ~1-2 hours
 
-### 2. Phase 6: Polish & API Docs — NOT STARTED
+### 2. Phase 6: Polish & API Docs
 - Formal API documentation (OpenAPI spec or markdown)
 - Balance tuning config (currently hardcoded but reasonable)
 - Docker compose for development
 
-### 3. Unit tests — NOT STARTED
+### 3. Unit tests
 - No tests exist yet for any package
 - Priority areas: combat mechanics, trap detection, scroll effects, save/load roundtrip
 
@@ -111,7 +134,6 @@ Event logging instrumented across: game_start, room_enter, victory, trap_detecte
 Yrpg-backend/
 ├── cmd/server/main.go                    # HTTP server entry point
 ├── go.mod / go.sum                       # Go module + deps
-├── Dockerfile                            # Container build
 ├── internal/
 │   ├── analytics/export.go               # RAG export queries
 │   ├── db/

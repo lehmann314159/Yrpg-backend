@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
-	"github.com/yourusername/yrpg-backend/internal/db"
-	"github.com/yourusername/yrpg-backend/internal/mcp"
+	"github.com/lehmann314159/yrpg-backend/internal/db"
+	"github.com/lehmann314159/yrpg-backend/internal/mcp"
 )
 
 func corsMiddleware(allowedOrigins []string) mux.MiddlewareFunc {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/yourusername/yrpg-backend/internal/game"
+	"github.com/lehmann314159/yrpg-backend/internal/game"
 )
 
 // handleCombatStatus shows the current combat state

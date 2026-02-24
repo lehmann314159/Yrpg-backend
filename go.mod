@@ -1,4 +1,4 @@
-module github.com/yourusername/yrpg-backend
+module github.com/lehmann314159/yrpg-backend
 
 go 1.25.0
 

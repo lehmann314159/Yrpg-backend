@@ -5,7 +5,7 @@ import (
 	"fmt"
 	mrand "math/rand"
 
-	"github.com/yourusername/yrpg-backend/internal/game"
+	"github.com/lehmann314159/yrpg-backend/internal/game"
 )
 
 // Grid and generation constants

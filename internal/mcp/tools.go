@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourusername/yrpg-backend/internal/game"
-	"github.com/yourusername/yrpg-backend/internal/generator"
+	"github.com/lehmann314159/yrpg-backend/internal/game"
+	"github.com/lehmann314159/yrpg-backend/internal/generator"
 )
 
 // handleNewGame starts a new game with a party

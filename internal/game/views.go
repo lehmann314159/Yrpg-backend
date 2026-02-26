@@ -70,17 +70,20 @@ type TrapView struct {
 }
 
 type CombatantView struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	IsPlayerChar bool   `json:"isPlayerChar"`
-	HP           int    `json:"hp"`
-	MaxHP        int    `json:"maxHp"`
-	GridX        int    `json:"gridX"`
-	GridY        int    `json:"gridY"`
-	HasMoved     bool   `json:"hasMoved"`
-	HasActed     bool   `json:"hasActed"`
-	IsAlive      bool   `json:"isAlive"`
-	IsHidden     bool   `json:"isHidden"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	IsPlayerChar  bool     `json:"isPlayerChar"`
+	HP            int      `json:"hp"`
+	MaxHP         int      `json:"maxHp"`
+	GridX         int      `json:"gridX"`
+	GridY         int      `json:"gridY"`
+	HasMoved      bool     `json:"hasMoved"`
+	HasActed      bool     `json:"hasActed"`
+	IsAlive       bool     `json:"isAlive"`
+	IsHidden      bool     `json:"isHidden"`
+	MovementRange int      `json:"movementRange"`
+	AttackRange   int      `json:"attackRange"`
+	KnownSpells   []string `json:"knownSpells,omitempty"`
 }
 
 type CombatView struct {
@@ -159,7 +162,7 @@ func (gs *GameState) BuildSnapshot() *GameStateSnapshot {
 
 	// Combat
 	if gs.InCombat() {
-		snap.Combat = buildCombatView(gs.Combat)
+		snap.Combat = buildCombatView(gs.Combat, gs)
 	}
 
 	return snap
@@ -282,7 +285,7 @@ func buildTrapView(t *Trap) *TrapView {
 	}
 }
 
-func buildCombatView(cs *CombatState) *CombatView {
+func buildCombatView(cs *CombatState, gs *GameState) *CombatView {
 	cv := &CombatView{
 		CurrentTurnIdx: cs.CurrentTurnIdx,
 		RoundNumber:    cs.RoundNumber,
@@ -306,7 +309,7 @@ func buildCombatView(cs *CombatState) *CombatView {
 	// Build combatant views
 	cv.Combatants = make([]*CombatantView, 0, len(cs.Combatants))
 	for _, c := range cs.Combatants {
-		cv.Combatants = append(cv.Combatants, &CombatantView{
+		view := &CombatantView{
 			ID:           c.ID,
 			Name:         c.Name,
 			IsPlayerChar: c.IsPlayerChar,
@@ -318,7 +321,32 @@ func buildCombatView(cs *CombatState) *CombatView {
 			HasActed:     c.HasActed,
 			IsAlive:      c.IsAlive,
 			IsHidden:     c.IsHidden,
-		})
+		}
+
+		if c.IsPlayerChar {
+			if gs.Party != nil {
+				if char := gs.Party.GetCharacter(c.CharacterID); char != nil {
+					view.MovementRange = char.GetMovementRange()
+					view.AttackRange = 1
+					if char.EquippedWeaponID != nil {
+						if weapon, ok := gs.Items[*char.EquippedWeaponID]; ok && weapon.Range == RangeRanged {
+							view.AttackRange = weapon.MaxRange
+						}
+					}
+					if len(char.KnownSpells) > 0 {
+						view.KnownSpells = char.KnownSpells
+					}
+				}
+			}
+		} else {
+			view.MovementRange = 2
+			view.AttackRange = 1
+			if monster, ok := gs.Monsters[c.CharacterID]; ok && monster.IsRanged {
+				view.AttackRange = monster.AttackRange
+			}
+		}
+
+		cv.Combatants = append(cv.Combatants, view)
 	}
 
 	return cv

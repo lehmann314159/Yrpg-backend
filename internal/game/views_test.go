@@ -238,7 +238,7 @@ func TestBuildCombatView(t *testing.T) {
 	cs.PlaceOnGrid(c1, 0, 0)
 	cs.PlaceOnGrid(c2, 5, 5)
 
-	cv := buildCombatView(cs)
+	cv := buildCombatView(cs, NewGameState("test"))
 	if cv.RoundNumber != 3 {
 		t.Errorf("RoundNumber = %d, want 3", cv.RoundNumber)
 	}
@@ -266,9 +266,156 @@ func TestBuildCombatView_BlockedCell(t *testing.T) {
 	cs := newTestCombatState()
 	cs.Grid[3][3].IsBlocked = true
 
-	cv := buildCombatView(cs)
+	cv := buildCombatView(cs, NewGameState("test"))
 	if cv.Grid[3][3] != "blocked" {
 		t.Errorf("blocked cell = %q, want 'blocked'", cv.Grid[3][3])
+	}
+}
+
+func TestBuildCombatView_MovementAndAttackRange(t *testing.T) {
+	gs := NewGameState("test")
+	party, err := NewParty([]PartyRequest{
+		{Name: "Tank", Class: ClassFighter},
+		{Name: "Scout", Class: ClassThief},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	gs.Party = party
+
+	fighter := party.GetCharacterByName("Tank")
+	thief := party.GetCharacterByName("Scout")
+
+	// Give thief a ranged weapon
+	bow := &Item{
+		ID:       "bow1",
+		Name:     "Longbow",
+		Type:     ItemWeapon,
+		Damage:   4,
+		Range:    RangeRanged,
+		MaxRange: 5,
+		Rarity:   "common",
+	}
+	gs.AddItem(bow)
+	thief.EquippedWeaponID = &bow.ID
+
+	// Give fighter a melee weapon
+	sword := &Item{
+		ID:     "sword1",
+		Name:   "Sword",
+		Type:   ItemWeapon,
+		Damage: 6,
+		Range:  RangeMelee,
+		Rarity: "common",
+	}
+	gs.AddItem(sword)
+	fighter.EquippedWeaponID = &sword.ID
+
+	// Add monsters
+	gs.AddMonster(&Monster{ID: "m1", Name: "Goblin", HP: 10, MaxHP: 10, IsAlive: true, RoomID: "r1"})
+	gs.AddMonster(&Monster{ID: "m2", Name: "Archer", HP: 8, MaxHP: 8, IsAlive: true, RoomID: "r1", IsRanged: true, AttackRange: 3})
+
+	cs := newTestCombatState()
+	cs.Combatants = []*Combatant{
+		{ID: fighter.ID, Name: "Tank", IsPlayerChar: true, CharacterID: fighter.ID, IsAlive: true, HP: 30, MaxHP: 30},
+		{ID: thief.ID, Name: "Scout", IsPlayerChar: true, CharacterID: thief.ID, IsAlive: true, HP: 22, MaxHP: 22},
+		{ID: "m1", Name: "Goblin", IsPlayerChar: false, CharacterID: "m1", IsAlive: true, HP: 10, MaxHP: 10},
+		{ID: "m2", Name: "Archer", IsPlayerChar: false, CharacterID: "m2", IsAlive: true, HP: 8, MaxHP: 8},
+	}
+	cs.PlaceOnGrid(cs.Combatants[0], 0, 0)
+	cs.PlaceOnGrid(cs.Combatants[1], 1, 0)
+	cs.PlaceOnGrid(cs.Combatants[2], 5, 5)
+	cs.PlaceOnGrid(cs.Combatants[3], 4, 5)
+	gs.Combat = cs
+	gs.Mode = ModeCombat
+
+	cv := buildCombatView(cs, gs)
+
+	// Find combatant views by name
+	views := make(map[string]*CombatantView)
+	for _, v := range cv.Combatants {
+		views[v.Name] = v
+	}
+
+	// Fighter: movementRange=2, attackRange=1 (melee weapon)
+	if views["Tank"].MovementRange != 2 {
+		t.Errorf("Fighter movementRange = %d, want 2", views["Tank"].MovementRange)
+	}
+	if views["Tank"].AttackRange != 1 {
+		t.Errorf("Fighter attackRange = %d, want 1", views["Tank"].AttackRange)
+	}
+
+	// Thief: movementRange=4, attackRange=5 (ranged weapon MaxRange)
+	if views["Scout"].MovementRange != 4 {
+		t.Errorf("Thief movementRange = %d, want 4", views["Scout"].MovementRange)
+	}
+	if views["Scout"].AttackRange != 5 {
+		t.Errorf("Thief attackRange = %d, want 5", views["Scout"].AttackRange)
+	}
+
+	// Melee monster: movementRange=2, attackRange=1
+	if views["Goblin"].MovementRange != 2 {
+		t.Errorf("Goblin movementRange = %d, want 2", views["Goblin"].MovementRange)
+	}
+	if views["Goblin"].AttackRange != 1 {
+		t.Errorf("Goblin attackRange = %d, want 1", views["Goblin"].AttackRange)
+	}
+
+	// Ranged monster: movementRange=2, attackRange=3
+	if views["Archer"].MovementRange != 2 {
+		t.Errorf("Archer movementRange = %d, want 2", views["Archer"].MovementRange)
+	}
+	if views["Archer"].AttackRange != 3 {
+		t.Errorf("Archer attackRange = %d, want 3", views["Archer"].AttackRange)
+	}
+}
+
+func TestBuildCombatView_KnownSpells(t *testing.T) {
+	gs := NewGameState("test")
+	party, err := NewParty([]PartyRequest{
+		{Name: "Gandalf", Class: ClassMagicUser},
+		{Name: "Conan", Class: ClassFighter},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	gs.Party = party
+
+	mage := party.GetCharacterByName("Gandalf")
+	fighter := party.GetCharacterByName("Conan")
+
+	cs := newTestCombatState()
+	cs.Combatants = []*Combatant{
+		{ID: mage.ID, Name: "Gandalf", IsPlayerChar: true, CharacterID: mage.ID, IsAlive: true, HP: 16, MaxHP: 16},
+		{ID: fighter.ID, Name: "Conan", IsPlayerChar: true, CharacterID: fighter.ID, IsAlive: true, HP: 30, MaxHP: 30},
+	}
+	cs.PlaceOnGrid(cs.Combatants[0], 0, 0)
+	cs.PlaceOnGrid(cs.Combatants[1], 1, 0)
+	gs.Combat = cs
+	gs.Mode = ModeCombat
+
+	cv := buildCombatView(cs, gs)
+
+	views := make(map[string]*CombatantView)
+	for _, v := range cv.Combatants {
+		views[v.Name] = v
+	}
+
+	// MagicUser should have knownSpells
+	if len(views["Gandalf"].KnownSpells) != 2 {
+		t.Errorf("Gandalf knownSpells length = %d, want 2", len(views["Gandalf"].KnownSpells))
+	}
+	spellSet := make(map[string]bool)
+	for _, s := range views["Gandalf"].KnownSpells {
+		spellSet[s] = true
+	}
+	if !spellSet["heal"] || !spellSet["fireball"] {
+		t.Errorf("Gandalf knownSpells = %v, want [heal, fireball]", views["Gandalf"].KnownSpells)
+	}
+
+	// Fighter should have no knownSpells
+	if len(views["Conan"].KnownSpells) != 0 {
+		t.Errorf("Conan knownSpells should be empty, got %v", views["Conan"].KnownSpells)
 	}
 }
 

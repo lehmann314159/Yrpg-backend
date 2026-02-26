@@ -87,6 +87,44 @@ func CheckTrapDetection(party *Party, trap *Trap, rng *rand.Rand) *TrapDetection
 	return best
 }
 
+// CheckTrapDetectionSolo performs passive trap detection for a single character against a trap.
+// Used when the thief scouts ahead alone.
+func CheckTrapDetectionSolo(char *Character, trap *Trap, rng *rand.Rand) *TrapDetectionResult {
+	if trap.IsTriggered || trap.IsDiscovered || trap.IsDisarmed {
+		return &TrapDetectionResult{Detected: false, Trap: trap}
+	}
+
+	if !char.IsAlive {
+		return &TrapDetectionResult{Detected: false, Trap: trap, DC: trap.Difficulty}
+	}
+
+	roll := rng.Intn(20) + 1 // d20
+	bonus := char.Dexterity / 2
+
+	switch char.Class {
+	case ClassThief:
+		bonus += ThiefDetectionBonus
+	case ClassMagicUser:
+		bonus += MagicUserDetectionBonus
+	}
+
+	total := roll + bonus
+	result := &TrapDetectionResult{
+		Detected:     total >= trap.Difficulty,
+		DetectorID:   char.ID,
+		DetectorName: char.Name,
+		Roll:         total,
+		DC:           trap.Difficulty,
+		Trap:         trap,
+	}
+
+	if result.Detected {
+		trap.IsDiscovered = true
+	}
+
+	return result
+}
+
 // TriggerTrap applies trap damage to the victim
 func TriggerTrap(trap *Trap, victim *Character, rng *rand.Rand) *TrapTriggerResult {
 	if trap.IsTriggered || trap.IsDisarmed {

@@ -307,3 +307,161 @@ func TestAdvanceTurn_AllDead(t *testing.T) {
 		t.Error("combat should become inactive when all combatants dead")
 	}
 }
+
+func TestInitScoutCombat(t *testing.T) {
+	thief, err := NewCharacter("Shadow", ClassThief)
+	if err != nil {
+		t.Fatalf("NewCharacter: %v", err)
+	}
+
+	monsters := []*Monster{
+		{ID: "m1", Name: "Goblin", HP: 10, MaxHP: 10, Dexterity: 8, IsAlive: true},
+		{ID: "m2", Name: "Orc", HP: 20, MaxHP: 20, Dexterity: 10, IsAlive: true},
+	}
+
+	rng := rand.New(rand.NewSource(42))
+	cs := InitScoutCombat(thief, monsters, "prev-room", rng)
+
+	if !cs.IsActive {
+		t.Error("combat should be active")
+	}
+	if !cs.IsScoutPhase {
+		t.Error("should be scout phase")
+	}
+	if cs.ScoutID != thief.ID {
+		t.Errorf("ScoutID = %q, want %q", cs.ScoutID, thief.ID)
+	}
+	if cs.PreviousRoomID != "prev-room" {
+		t.Errorf("PreviousRoomID = %q, want prev-room", cs.PreviousRoomID)
+	}
+
+	// Should have 3 combatants (1 thief + 2 monsters)
+	if len(cs.Combatants) != 3 {
+		t.Fatalf("combatant count = %d, want 3", len(cs.Combatants))
+	}
+
+	// Thief should be first (initiative 100)
+	if cs.Combatants[0].ID != thief.ID {
+		t.Error("thief should be first combatant")
+	}
+	if cs.Combatants[0].Initiative != 100 {
+		t.Errorf("thief initiative = %d, want 100", cs.Combatants[0].Initiative)
+	}
+	if !cs.Combatants[0].IsHidden {
+		t.Error("thief should start hidden")
+	}
+
+	// Thief should be in row 0
+	thiefCombatant := cs.GetCombatant(thief.ID)
+	if thiefCombatant.GridY != 0 {
+		t.Errorf("thief GridY = %d, want 0", thiefCombatant.GridY)
+	}
+
+	// Monsters should be in rows 4-5 with 0 initiative
+	for _, c := range cs.GetEnemyCombatants() {
+		if c.GridY < 4 {
+			t.Errorf("monster %s at Y=%d, want >= 4", c.Name, c.GridY)
+		}
+		if c.Initiative != 0 {
+			t.Errorf("monster %s initiative = %d, want 0 (frozen)", c.Name, c.Initiative)
+		}
+	}
+}
+
+func TestAddPartyToCombat(t *testing.T) {
+	party, err := NewParty([]PartyRequest{
+		{Name: "Shadow", Class: ClassThief},
+		{Name: "Conan", Class: ClassFighter},
+		{Name: "Gandalf", Class: ClassMagicUser},
+	})
+	if err != nil {
+		t.Fatalf("NewParty: %v", err)
+	}
+
+	thief := party.GetByClass(ClassThief)
+	monsters := []*Monster{
+		{ID: "m1", Name: "Goblin", HP: 10, MaxHP: 10, Dexterity: 8, IsAlive: true},
+	}
+
+	rng := rand.New(rand.NewSource(42))
+	cs := InitScoutCombat(thief, monsters, "prev-room", rng)
+
+	// Verify only 2 combatants before adding party (thief + 1 monster)
+	if len(cs.Combatants) != 2 {
+		t.Fatalf("initial combatant count = %d, want 2", len(cs.Combatants))
+	}
+
+	// Add party
+	AddPartyToCombat(cs, party, monsters, rng)
+
+	// Should now have 4 combatants (3 party + 1 monster)
+	if len(cs.Combatants) != 4 {
+		t.Fatalf("combatant count after AddPartyToCombat = %d, want 4", len(cs.Combatants))
+	}
+
+	// Scout phase flags should be cleared
+	if cs.IsScoutPhase {
+		t.Error("IsScoutPhase should be false after AddPartyToCombat")
+	}
+	if cs.AwaitingScoutDecision {
+		t.Error("AwaitingScoutDecision should be false after AddPartyToCombat")
+	}
+	if cs.CurrentTurnIdx != 0 {
+		t.Errorf("CurrentTurnIdx = %d, want 0", cs.CurrentTurnIdx)
+	}
+	if cs.RoundNumber != 1 {
+		t.Errorf("RoundNumber = %d, want 1", cs.RoundNumber)
+	}
+
+	// All combatants should have re-rolled initiative (non-zero for players)
+	for _, c := range cs.GetPlayerCombatants() {
+		if c.Initiative <= 0 {
+			t.Errorf("player %s initiative = %d, want > 0", c.Name, c.Initiative)
+		}
+	}
+
+	// Monster should have non-zero initiative now (re-rolled)
+	for _, c := range cs.GetEnemyCombatants() {
+		if c.Initiative <= 0 {
+			t.Errorf("monster %s initiative = %d, want > 0 after re-roll", c.Name, c.Initiative)
+		}
+	}
+
+	// All combatants should have HasMoved/HasActed reset
+	for _, c := range cs.Combatants {
+		if c.HasMoved {
+			t.Errorf("combatant %s HasMoved should be false", c.Name)
+		}
+		if c.HasActed {
+			t.Errorf("combatant %s HasActed should be false", c.Name)
+		}
+	}
+}
+
+func TestAddPartyToCombat_SoloThief(t *testing.T) {
+	// Solo party (thief only) — signal_party adds 0 additional combatants
+	party, err := NewParty([]PartyRequest{
+		{Name: "Shadow", Class: ClassThief},
+	})
+	if err != nil {
+		t.Fatalf("NewParty: %v", err)
+	}
+
+	thief := party.GetByClass(ClassThief)
+	monsters := []*Monster{
+		{ID: "m1", Name: "Goblin", HP: 10, MaxHP: 10, Dexterity: 8, IsAlive: true},
+	}
+
+	rng := rand.New(rand.NewSource(42))
+	cs := InitScoutCombat(thief, monsters, "prev-room", rng)
+
+	AddPartyToCombat(cs, party, monsters, rng)
+
+	// Should still have 2 combatants (thief + monster, no one else to add)
+	if len(cs.Combatants) != 2 {
+		t.Fatalf("combatant count = %d, want 2", len(cs.Combatants))
+	}
+	if cs.IsScoutPhase {
+		t.Error("scout phase should be cleared")
+	}
+}

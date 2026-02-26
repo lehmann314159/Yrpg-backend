@@ -66,6 +66,11 @@ type CombatState struct {
 	Engagements    map[string]string  `json:"engagements"` // combatantID -> engagedWithID
 	IsActive       bool               `json:"is_active"`
 	PreviousRoomID string             `json:"previous_room_id"`
+
+	// Scout phase (thief scout_ahead)
+	IsScoutPhase          bool   `json:"is_scout_phase"`
+	AwaitingScoutDecision bool   `json:"awaiting_scout_decision"`
+	ScoutID               string `json:"scout_id,omitempty"`
 }
 
 type GridCell struct {

@@ -87,11 +87,13 @@ type CombatantView struct {
 }
 
 type CombatView struct {
-	Grid           [6][6]string     `json:"grid"` // cell contents for display
-	Combatants     []*CombatantView `json:"combatants"`
-	CurrentTurnIdx int              `json:"currentTurnIdx"`
-	RoundNumber    int              `json:"roundNumber"`
-	IsActive       bool             `json:"isActive"`
+	Grid                  [6][6]string     `json:"grid"` // cell contents for display
+	Combatants            []*CombatantView `json:"combatants"`
+	CurrentTurnIdx        int              `json:"currentTurnIdx"`
+	RoundNumber           int              `json:"roundNumber"`
+	IsActive              bool             `json:"isActive"`
+	AwaitingScoutDecision bool             `json:"awaitingScoutDecision"`
+	IsScoutPhase          bool             `json:"isScoutPhase"`
 }
 
 type MapCell struct {
@@ -287,9 +289,11 @@ func buildTrapView(t *Trap) *TrapView {
 
 func buildCombatView(cs *CombatState, gs *GameState) *CombatView {
 	cv := &CombatView{
-		CurrentTurnIdx: cs.CurrentTurnIdx,
-		RoundNumber:    cs.RoundNumber,
-		IsActive:       cs.IsActive,
+		CurrentTurnIdx:        cs.CurrentTurnIdx,
+		RoundNumber:           cs.RoundNumber,
+		IsActive:              cs.IsActive,
+		AwaitingScoutDecision: cs.AwaitingScoutDecision,
+		IsScoutPhase:          cs.IsScoutPhase,
 	}
 
 	// Build grid display
@@ -327,6 +331,9 @@ func buildCombatView(cs *CombatState, gs *GameState) *CombatView {
 			if gs.Party != nil {
 				if char := gs.Party.GetCharacter(c.CharacterID); char != nil {
 					view.MovementRange = char.GetMovementRange()
+					if cs.IsScoutPhase && c.ID == cs.ScoutID {
+						view.MovementRange *= 2
+					}
 					view.AttackRange = 1
 					if char.EquippedWeaponID != nil {
 						if weapon, ok := gs.Items[*char.EquippedWeaponID]; ok && weapon.Range == RangeRanged {

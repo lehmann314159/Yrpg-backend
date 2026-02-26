@@ -440,6 +440,29 @@ func (s *Server) ListTools() []Tool {
 			},
 		},
 		{
+			Name:        "scout_ahead",
+			Description: "Thief enters an adjacent room solo for a surprise round with double movement. Only usable by a thief during exploration when the target room has enemies.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"character_id": map[string]interface{}{"type": "string", "description": "ID of the thief character"},
+					"direction":    map[string]interface{}{"type": "string", "description": "Direction to scout", "enum": []string{"north", "south", "east", "west"}},
+				},
+				"required": []string{"character_id", "direction"},
+			},
+		},
+		{
+			Name:        "signal_party",
+			Description: "After scouting, signal the rest of the party to join combat. Only usable during scout decision phase.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"character_id": map[string]interface{}{"type": "string", "description": "ID of the scouting thief"},
+				},
+				"required": []string{"character_id"},
+			},
+		},
+		{
 			Name:        "end_turn",
 			Description: "End the current character's turn without acting",
 			InputSchema: map[string]interface{}{
@@ -593,6 +616,21 @@ func (s *Server) CallTool(name string, arguments map[string]interface{}) (*ToolR
 			return nil, fmt.Errorf("character_id is required")
 		}
 		return s.handleEndTurn(charID)
+
+	// Scout tools
+	case "scout_ahead":
+		charID, _ := arguments["character_id"].(string)
+		dir, _ := arguments["direction"].(string)
+		if charID == "" || dir == "" {
+			return nil, fmt.Errorf("character_id and direction are required")
+		}
+		return s.handleScoutAhead(charID, dir)
+	case "signal_party":
+		charID, _ := arguments["character_id"].(string)
+		if charID == "" {
+			return nil, fmt.Errorf("character_id is required")
+		}
+		return s.handleSignalParty(charID)
 
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)

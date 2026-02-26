@@ -276,6 +276,328 @@ func TestGenerateAmbushMonsters_ScalesToDepth(t *testing.T) {
 	}
 }
 
+// --- Scout Ahead ---
+
+func setupScoutableRoom(s *Server) (*game.Character, string) {
+	// Add a second room with monsters connected to room1
+	room2 := &game.Room{ID: "room2", Name: "Monster Room", X: 2, Y: 4}
+	s.state.AddRoom(room2)
+	s.state.AddConnection(&game.RoomConnection{
+		ID: "conn1", RoomID: "room1", Direction: "north", ConnectedRoomID: "room2",
+	})
+	s.state.AddConnection(&game.RoomConnection{
+		ID: "conn2", RoomID: "room2", Direction: "south", ConnectedRoomID: "room1",
+	})
+	s.state.AddMonster(&game.Monster{
+		ID: "m1", Name: "Goblin", HP: 10, MaxHP: 10, Dexterity: 8,
+		RoomID: "room2", IsAlive: true,
+	})
+
+	thief := getThief(s)
+	return thief, "north"
+}
+
+func TestHandleScoutAhead_RejectsNonThief(t *testing.T) {
+	s := newTestServer()
+	setupScoutableRoom(s)
+	fighter := getFighter(s)
+
+	result, err := s.handleScoutAhead(fighter.ID, "north")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Content[0].Text, "Only a thief") {
+		t.Errorf("expected thief-only rejection, got: %s", result.Content[0].Text)
+	}
+}
+
+func TestHandleScoutAhead_RejectsNoEnemies(t *testing.T) {
+	s := newTestServer()
+	// Add empty room
+	room2 := &game.Room{ID: "room2", Name: "Empty Room", X: 2, Y: 4}
+	s.state.AddRoom(room2)
+	s.state.AddConnection(&game.RoomConnection{
+		ID: "conn1", RoomID: "room1", Direction: "north", ConnectedRoomID: "room2",
+	})
+
+	thief := getThief(s)
+	result, err := s.handleScoutAhead(thief.ID, "north")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Content[0].Text, "No enemies") {
+		t.Errorf("expected no-enemies rejection, got: %s", result.Content[0].Text)
+	}
+}
+
+func TestHandleScoutAhead_RejectsBadDirection(t *testing.T) {
+	s := newTestServer()
+	thief := getThief(s)
+
+	result, err := s.handleScoutAhead(thief.ID, "north")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Content[0].Text, "no exit") {
+		t.Errorf("expected no-exit message, got: %s", result.Content[0].Text)
+	}
+}
+
+func TestHandleScoutAhead_RejectsInCombat(t *testing.T) {
+	s := newTestServer()
+	setupScoutableRoom(s)
+	thief := getThief(s)
+
+	// Put in combat mode
+	s.state.Mode = game.ModeCombat
+	s.state.Combat = &game.CombatState{IsActive: true, Engagements: make(map[string]string)}
+
+	result, err := s.handleScoutAhead(thief.ID, "north")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Content[0].Text, "in combat") {
+		t.Errorf("expected in-combat rejection, got: %s", result.Content[0].Text)
+	}
+}
+
+func TestHandleScoutAhead_SuccessEntersScoutCombat(t *testing.T) {
+	s := newTestServer()
+	// Use a seed that gives high sneak roll
+	s.rng = rand.New(rand.NewSource(99))
+	thief, dir := setupScoutableRoom(s)
+
+	result, err := s.handleScoutAhead(thief.ID, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := result.Content[0].Text
+
+	// Check if sneak succeeded (depends on RNG seed)
+	if strings.Contains(text, "SURPRISE ROUND") {
+		// Should be in combat mode
+		if s.state.Mode != game.ModeCombat {
+			t.Error("should be in combat mode")
+		}
+		if s.state.Combat == nil {
+			t.Fatal("combat state should be set")
+		}
+		if !s.state.Combat.IsScoutPhase {
+			t.Error("should be scout phase")
+		}
+		if s.state.Combat.ScoutID != thief.ID {
+			t.Errorf("ScoutID = %q, want %q", s.state.Combat.ScoutID, thief.ID)
+		}
+		// Thief should have moved to room2
+		if thief.CurrentRoomID != "room2" {
+			t.Errorf("thief room = %q, want room2", thief.CurrentRoomID)
+		}
+		// Other party members should still be in room1
+		fighter := getFighter(s)
+		if fighter.CurrentRoomID != "room1" {
+			t.Errorf("fighter should still be in room1, got %q", fighter.CurrentRoomID)
+		}
+	} else if strings.Contains(text, "Detected") {
+		// Sneak failed — should be normal combat
+		if s.state.Mode != game.ModeCombat {
+			t.Error("should be in combat mode after failed sneak")
+		}
+		if s.state.Combat != nil && s.state.Combat.IsScoutPhase {
+			t.Error("should NOT be scout phase after failed sneak")
+		}
+	} else {
+		t.Errorf("unexpected result text: %s", text)
+	}
+}
+
+func TestHandleSignalParty_Success(t *testing.T) {
+	s := newTestServer()
+	// Use seed that gives high sneak
+	s.rng = rand.New(rand.NewSource(99))
+	thief, dir := setupScoutableRoom(s)
+
+	// Scout ahead first
+	_, err := s.handleScoutAhead(thief.ID, dir)
+	if err != nil {
+		t.Fatalf("scout error: %v", err)
+	}
+
+	// If sneak failed, skip this test
+	if s.state.Combat == nil || !s.state.Combat.IsScoutPhase {
+		t.Skip("sneak failed with this seed, skipping signal_party test")
+	}
+
+	// Simulate end of surprise round: set awaiting decision
+	s.state.Combat.AwaitingScoutDecision = true
+
+	result, err := s.handleSignalParty(thief.ID)
+	if err != nil {
+		t.Fatalf("signal error: %v", err)
+	}
+	text := result.Content[0].Text
+
+	if !strings.Contains(text, "signals the party") {
+		t.Errorf("expected signal message, got: %s", text)
+	}
+
+	// Scout phase should be cleared
+	if s.state.Combat != nil && s.state.Combat.IsScoutPhase {
+		t.Error("scout phase should be cleared after signal")
+	}
+
+	// All party members should be in room2
+	for _, c := range s.state.Party.AliveCharacters() {
+		if c.CurrentRoomID != "room2" {
+			t.Errorf("%s should be in room2, got %q", c.Name, c.CurrentRoomID)
+		}
+	}
+}
+
+func TestHandleSignalParty_RejectsWrongCharacter(t *testing.T) {
+	s := newTestServer()
+	s.rng = rand.New(rand.NewSource(99))
+	thief, dir := setupScoutableRoom(s)
+
+	_, err := s.handleScoutAhead(thief.ID, dir)
+	if err != nil {
+		t.Fatalf("scout error: %v", err)
+	}
+
+	if s.state.Combat == nil || !s.state.Combat.IsScoutPhase {
+		t.Skip("sneak failed with this seed")
+	}
+
+	s.state.Combat.AwaitingScoutDecision = true
+	fighter := getFighter(s)
+
+	result, err := s.handleSignalParty(fighter.ID)
+	if err != nil {
+		t.Fatalf("signal error: %v", err)
+	}
+	if !strings.Contains(result.Content[0].Text, "Only the scouting thief") {
+		t.Errorf("expected wrong-character rejection, got: %s", result.Content[0].Text)
+	}
+}
+
+func TestHandleSignalParty_RejectsNotAwaiting(t *testing.T) {
+	s := newTestServer()
+	s.rng = rand.New(rand.NewSource(99))
+	thief, dir := setupScoutableRoom(s)
+
+	_, err := s.handleScoutAhead(thief.ID, dir)
+	if err != nil {
+		t.Fatalf("scout error: %v", err)
+	}
+
+	if s.state.Combat == nil || !s.state.Combat.IsScoutPhase {
+		t.Skip("sneak failed with this seed")
+	}
+
+	// Don't set AwaitingScoutDecision
+	result, err := s.handleSignalParty(thief.ID)
+	if err != nil {
+		t.Fatalf("signal error: %v", err)
+	}
+	if !strings.Contains(result.Content[0].Text, "Not awaiting") {
+		t.Errorf("expected not-awaiting rejection, got: %s", result.Content[0].Text)
+	}
+}
+
+func TestGuardClauses_RejectDuringScoutDecision(t *testing.T) {
+	s := newTestServer()
+	thief := getThief(s)
+
+	// Set up a scout combat with awaiting decision
+	s.state.Mode = game.ModeCombat
+	s.state.Combat = &game.CombatState{
+		IsActive:              true,
+		IsScoutPhase:          true,
+		AwaitingScoutDecision: true,
+		ScoutID:               thief.ID,
+		RoundNumber:           1,
+		CurrentTurnIdx:        0,
+		Engagements:           make(map[string]string),
+		Combatants: []*game.Combatant{
+			{ID: thief.ID, Name: thief.Name, IsPlayerChar: true, CharacterID: thief.ID, IsAlive: true, HP: 22, MaxHP: 22},
+		},
+	}
+
+	// All these should reject with the awaiting scout decision message
+	handlers := []struct {
+		name string
+		fn   func() (*ToolResult, error)
+	}{
+		{"combat_move", func() (*ToolResult, error) { return s.handleCombatMove(thief.ID, 1, 1) }},
+		{"combat_attack", func() (*ToolResult, error) { return s.handleCombatAttack(thief.ID, "m1") }},
+		{"combat_use_item", func() (*ToolResult, error) { return s.handleCombatUseItem(thief.ID, "i1", "") }},
+		{"combat_defend", func() (*ToolResult, error) { return s.handleCombatDefend(thief.ID) }},
+		{"combat_hide", func() (*ToolResult, error) { return s.handleCombatHide(thief.ID) }},
+		{"end_turn", func() (*ToolResult, error) { return s.handleEndTurn(thief.ID) }},
+		{"combat_cast_spell", func() (*ToolResult, error) { return s.handleCombatCastSpell(thief.ID, "heal", "") }},
+	}
+
+	for _, h := range handlers {
+		result, err := h.fn()
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", h.name, err)
+		}
+		if !strings.Contains(result.Content[0].Text, "signal_party") {
+			t.Errorf("%s: expected scout decision rejection, got: %s", h.name, result.Content[0].Text)
+		}
+	}
+}
+
+func TestHandleCombatRetreat_ScoutPhaseNoEngagement(t *testing.T) {
+	s := newTestServer()
+	thief := getThief(s)
+
+	// Set up scout combat with awaiting decision, no engagement
+	s.state.Mode = game.ModeCombat
+	cs := &game.CombatState{
+		IsActive:              true,
+		IsScoutPhase:          true,
+		AwaitingScoutDecision: true,
+		ScoutID:               thief.ID,
+		PreviousRoomID:        "room1",
+		RoundNumber:           1,
+		CurrentTurnIdx:        0,
+		Engagements:           make(map[string]string),
+		Combatants: []*game.Combatant{
+			{ID: thief.ID, Name: thief.Name, IsPlayerChar: true, CharacterID: thief.ID, IsAlive: true, HP: 22, MaxHP: 22, GridX: 3, GridY: 0},
+			{ID: "m1", Name: "Goblin", IsPlayerChar: false, CharacterID: "m1", IsAlive: true, HP: 10, MaxHP: 10, GridX: 3, GridY: 5},
+		},
+	}
+	// Initialize grid
+	for y := 0; y < game.GridHeight; y++ {
+		for x := 0; x < game.GridWidth; x++ {
+			cs.Grid[y][x] = &game.GridCell{X: x, Y: y}
+		}
+	}
+	cs.PlaceOnGrid(cs.Combatants[0], 3, 0)
+	cs.PlaceOnGrid(cs.Combatants[1], 3, 5)
+	s.state.Combat = cs
+
+	thief.CurrentRoomID = "room2"
+
+	result, err := s.handleCombatRetreat(thief.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := result.Content[0].Text
+
+	if !strings.Contains(text, "slips away") {
+		t.Errorf("expected retreat success message, got: %s", text)
+	}
+
+	// Should be back in exploration mode
+	if s.state.Mode != game.ModeExploration {
+		t.Error("should be back in exploration mode")
+	}
+	if thief.CurrentRoomID != "room1" {
+		t.Errorf("thief should return to room1, got %q", thief.CurrentRoomID)
+	}
+}
+
 // --- Scroll learning (useScroll) ---
 
 func TestUseScroll_MagicUserLearnsSpell(t *testing.T) {

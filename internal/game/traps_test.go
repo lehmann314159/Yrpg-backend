@@ -199,6 +199,59 @@ func TestFormatTrapTrigger(t *testing.T) {
 	}
 }
 
+func TestCheckTrapDetectionSolo_ThiefDetects(t *testing.T) {
+	// Use a seed that gives a high roll so detection succeeds
+	rng := rand.New(rand.NewSource(99))
+	thief, _ := NewCharacter("Thief", ClassThief)
+
+	trap := &Trap{
+		ID:         "t1",
+		RoomID:     "r1",
+		Difficulty: 10, // low DC, thief bonus should guarantee detection
+	}
+
+	result := CheckTrapDetectionSolo(thief, trap, rng)
+	if !result.Detected {
+		t.Errorf("expected thief to detect trap (roll=%d, DC=%d)", result.Roll, result.DC)
+	}
+	if result.DetectorID != thief.ID {
+		t.Errorf("DetectorID = %q, want %q", result.DetectorID, thief.ID)
+	}
+	if !trap.IsDiscovered {
+		t.Error("trap should be marked discovered")
+	}
+}
+
+func TestCheckTrapDetectionSolo_SkipsTriggeredTrap(t *testing.T) {
+	rng := rand.New(rand.NewSource(99))
+	thief, _ := NewCharacter("Thief", ClassThief)
+
+	trap := &Trap{ID: "t1", Difficulty: 5, IsTriggered: true}
+	result := CheckTrapDetectionSolo(thief, trap, rng)
+	if result.Detected {
+		t.Error("should not detect already triggered trap")
+	}
+}
+
+func TestCheckTrapDetectionSolo_HighDCFails(t *testing.T) {
+	// Use a seed that gives a low roll
+	rng := rand.New(rand.NewSource(1))
+	fighter, _ := NewCharacter("Fighter", ClassFighter)
+
+	trap := &Trap{
+		ID:         "t1",
+		Difficulty: 30, // impossibly high
+	}
+
+	result := CheckTrapDetectionSolo(fighter, trap, rng)
+	if result.Detected {
+		t.Error("fighter should not detect trap with DC 30")
+	}
+	if trap.IsDiscovered {
+		t.Error("trap should not be marked discovered on failure")
+	}
+}
+
 func TestFormatDisarmResult(t *testing.T) {
 	success := &TrapDisarmResult{
 		Success:      true,

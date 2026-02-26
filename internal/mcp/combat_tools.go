@@ -5,7 +5,10 @@ import (
 	"strings"
 
 	"github.com/lehmann314159/yrpg-backend/internal/game"
+	"github.com/lehmann314159/yrpg-backend/internal/generator"
 )
+
+const errAwaitingScoutDecision = "The scout must decide: use 'signal_party' to bring the party in, or 'combat_retreat' to pull back."
 
 // handleCombatStatus shows the current combat state
 func (s *Server) handleCombatStatus() (*ToolResult, error) {
@@ -71,6 +74,9 @@ func (s *Server) handleCombatMove(charID string, x, y int) (*ToolResult, error) 
 	if err := s.requireCombat(); err != nil {
 		return err, nil
 	}
+	if s.state.Combat.AwaitingScoutDecision {
+		return s.textResult(errAwaitingScoutDecision), nil
+	}
 
 	combatant, errResult := s.requirePlayerTurn(charID)
 	if errResult != nil {
@@ -83,6 +89,9 @@ func (s *Server) handleCombatMove(charID string, x, y int) (*ToolResult, error) 
 	}
 
 	moveRange := char.GetMovementRange()
+	if s.state.Combat.IsScoutPhase && combatant.ID == s.state.Combat.ScoutID {
+		moveRange *= 2
+	}
 	result := game.CombatMove(s.state.Combat, combatant, x, y, moveRange)
 
 	return s.textResult(result.Message), nil
@@ -92,6 +101,9 @@ func (s *Server) handleCombatMove(charID string, x, y int) (*ToolResult, error) 
 func (s *Server) handleCombatAttack(charID, targetID string) (*ToolResult, error) {
 	if err := s.requireCombat(); err != nil {
 		return err, nil
+	}
+	if s.state.Combat.AwaitingScoutDecision {
+		return s.textResult(errAwaitingScoutDecision), nil
 	}
 
 	combatant, errResult := s.requirePlayerTurn(charID)
@@ -182,6 +194,9 @@ func (s *Server) handleCombatUseItem(charID, itemID, targetID string) (*ToolResu
 	if err := s.requireCombat(); err != nil {
 		return err, nil
 	}
+	if s.state.Combat.AwaitingScoutDecision {
+		return s.textResult(errAwaitingScoutDecision), nil
+	}
 
 	combatant, errResult := s.requirePlayerTurn(charID)
 	if errResult != nil {
@@ -219,6 +234,9 @@ func (s *Server) handleCombatDefend(charID string) (*ToolResult, error) {
 	if err := s.requireCombat(); err != nil {
 		return err, nil
 	}
+	if s.state.Combat.AwaitingScoutDecision {
+		return s.textResult(errAwaitingScoutDecision), nil
+	}
 
 	combatant, errResult := s.requirePlayerTurn(charID)
 	if errResult != nil {
@@ -244,6 +262,9 @@ func (s *Server) handleCombatDefend(charID string) (*ToolResult, error) {
 func (s *Server) handleCombatHide(charID string) (*ToolResult, error) {
 	if err := s.requireCombat(); err != nil {
 		return err, nil
+	}
+	if s.state.Combat.AwaitingScoutDecision {
+		return s.textResult(errAwaitingScoutDecision), nil
 	}
 
 	combatant, errResult := s.requirePlayerTurn(charID)
@@ -303,6 +324,88 @@ func (s *Server) handleCombatHide(charID string) (*ToolResult, error) {
 func (s *Server) handleCombatRetreat(charID string) (*ToolResult, error) {
 	if err := s.requireCombat(); err != nil {
 		return err, nil
+	}
+
+	cs := s.state.Combat
+
+	// Scout-phase retreat: thief retreats alone back to previous room
+	if cs.AwaitingScoutDecision && charID == cs.ScoutID {
+		combatant := cs.GetCombatant(charID)
+		if combatant == nil {
+			return s.textResult("Scout not found in combat."), nil
+		}
+		char, errResult := s.resolveCharacter(charID)
+		if errResult != nil {
+			return errResult, nil
+		}
+
+		var sb strings.Builder
+
+		// Check if scout is engaged with any enemy
+		_, engaged := cs.Engagements[combatant.ID]
+		if !engaged {
+			// No engagement: automatic success
+			cs.RemoveFromGrid(combatant)
+			sb.WriteString(fmt.Sprintf("%s slips away unnoticed and returns to the party.\n", combatant.Name))
+			s.endCombat()
+			char.CurrentRoomID = cs.PreviousRoomID
+			s.state.Combat = nil
+			s.state.Mode = game.ModeExploration
+			return s.textResult(sb.String()), nil
+		}
+
+		// Has engagement: standard retreat roll
+		result := game.AttemptRetreat(cs, combatant, char, s.rng)
+		sb.WriteString(game.FormatRetreatResult(result))
+		sb.WriteString("\n")
+
+		// Sync HP from opportunity attack
+		if result.OpportunityAttack != nil {
+			char.HP = combatant.HP
+			if !combatant.IsAlive {
+				char.TakeDamage(char.HP + 1)
+			}
+		}
+
+		if result.Success {
+			// Retreat succeeded: end combat, move thief back
+			s.endCombat()
+			char.CurrentRoomID = cs.PreviousRoomID
+			s.state.Combat = nil
+			s.state.Mode = game.ModeExploration
+			sb.WriteString(fmt.Sprintf("%s retreats to the previous room.\n", char.Name))
+			return s.textResult(sb.String()), nil
+		}
+
+		// Retreat failed: auto-signal party
+		sb.WriteString(fmt.Sprintf("%s is caught! The party rushes in!\n", char.Name))
+		monsters := s.state.GetRoomMonsters(char.CurrentRoomID)
+		s.state.Party.MoveAllToRoom(char.CurrentRoomID)
+		game.AddPartyToCombat(cs, s.state.Party, monsters, s.rng)
+
+		// Show initiative order
+		sb.WriteString("\nNew initiative order:\n")
+		for _, c := range cs.Combatants {
+			if !c.IsAlive {
+				continue
+			}
+			side := "ALLY"
+			if !c.IsPlayerChar {
+				side = "ENEMY"
+			}
+			sb.WriteString(fmt.Sprintf("  %s [%s] — Init: %d, HP: %d/%d, Pos: (%d,%d)\n",
+				c.Name, side, c.Initiative, c.HP, c.MaxHP, c.GridX, c.GridY))
+		}
+
+		// Run monster turns if first combatant is a monster
+		current := cs.GetCurrentCombatant()
+		if current != nil && !current.IsPlayerChar {
+			sb.WriteString(s.runMonsterTurns())
+		} else if current != nil {
+			sb.WriteString(fmt.Sprintf("\n%s's turn!\n", current.Name))
+		}
+
+		return s.textResult(sb.String()), nil
 	}
 
 	combatant, errResult := s.requirePlayerTurn(charID)
@@ -377,6 +480,9 @@ func (s *Server) handleEndTurn(charID string) (*ToolResult, error) {
 	if err := s.requireCombat(); err != nil {
 		return err, nil
 	}
+	if s.state.Combat.AwaitingScoutDecision {
+		return s.textResult(errAwaitingScoutDecision), nil
+	}
 
 	combatant, errResult := s.requirePlayerTurn(charID)
 	if errResult != nil {
@@ -399,6 +505,9 @@ func (s *Server) handleEndTurn(charID string) (*ToolResult, error) {
 func (s *Server) handleCombatCastSpell(charID, spellID, targetID string) (*ToolResult, error) {
 	if err := s.requireCombat(); err != nil {
 		return err, nil
+	}
+	if s.state.Combat.AwaitingScoutDecision {
+		return s.textResult(errAwaitingScoutDecision), nil
 	}
 
 	combatant, errResult := s.requirePlayerTurn(charID)
@@ -623,7 +732,15 @@ func (s *Server) advanceTurnAndRunMonsters() string {
 		return ""
 	}
 
-	s.state.Combat.AdvanceTurn()
+	cs := s.state.Combat
+
+	// During scout phase, after the thief acts, set awaiting decision instead of advancing
+	if cs.IsScoutPhase {
+		cs.AwaitingScoutDecision = true
+		return "\n\nSurprise round complete. Choose: 'signal_party' to bring the party in, or 'combat_retreat' to pull back."
+	}
+
+	cs.AdvanceTurn()
 
 	var sb strings.Builder
 
@@ -645,8 +762,14 @@ func (s *Server) runMonsterTurns() string {
 		return ""
 	}
 
-	var sb strings.Builder
 	cs := s.state.Combat
+
+	// Monsters are frozen during scout phase
+	if cs.IsScoutPhase {
+		return ""
+	}
+
+	var sb strings.Builder
 
 	for {
 		current := cs.GetCurrentCombatant()
@@ -756,6 +879,13 @@ func (s *Server) checkCombatEnd(sb *strings.Builder) string {
 	}
 
 	if result.AllEnemiesDead {
+		// During scout phase, move the full party to the scout's room before ending
+		if s.state.Combat != nil && s.state.Combat.IsScoutPhase {
+			scout := s.state.Party.GetCharacter(s.state.Combat.ScoutID)
+			if scout != nil {
+				s.state.Party.MoveAllToRoom(scout.CurrentRoomID)
+			}
+		}
 		s.logEvent("combat", "combat_victory", "", "", "", nil)
 		s.endCombat()
 		sb.WriteString("You may now explore or move on.\n")
@@ -812,4 +942,203 @@ func renderCombatGrid(cs *game.CombatState) string {
 
 	sb.WriteString("\n[X] = Party  {X} = Enemy  . = Empty\n")
 	return sb.String()
+}
+
+// --- Scout Ahead ---
+
+// handleScoutAhead has a thief enter an adjacent room solo for a surprise round
+func (s *Server) handleScoutAhead(charID, direction string) (*ToolResult, error) {
+	if err := s.requireExploration(); err != nil {
+		return err, nil
+	}
+
+	char, errResult := s.resolveCharacter(charID)
+	if errResult != nil {
+		return errResult, nil
+	}
+
+	if char.Class != game.ClassThief {
+		return s.textResult("Only a thief can scout ahead."), nil
+	}
+
+	currentRoom := s.state.GetCurrentRoom()
+	if currentRoom == nil {
+		return s.errorResult("Error: current room not found."), nil
+	}
+
+	// Can't leave if monsters are alive in current room
+	if s.state.HasMonstersInRoom(currentRoom.ID) {
+		return s.textResult("Cannot scout — enemies are still in this room!"), nil
+	}
+
+	exits := s.state.GetRoomExits(currentRoom.ID)
+	targetRoomID, ok := exits[direction]
+	if !ok {
+		return s.textResult(fmt.Sprintf("Cannot scout %s — no exit in that direction.", direction)), nil
+	}
+
+	// Check target room has monsters
+	monsters := s.state.GetRoomMonsters(targetRoomID)
+	if len(monsters) == 0 {
+		return s.textResult("No enemies in that room. Use 'move' instead."), nil
+	}
+
+	targetRoom := s.state.Rooms[targetRoomID]
+	previousRoomID := currentRoom.ID
+
+	s.state.ResetTurnContext()
+
+	// Sneak check (same DC as existing sneak)
+	difficulty := generator.GetRoomDifficulty(targetRoom)
+	sneakResult := game.CheckRoomSneak(char, difficulty, s.rng)
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%s creeps into the room to the %s...\n\n", char.Name, direction))
+	sb.WriteString(fmt.Sprintf("%s\n", game.FormatSneakResult(sneakResult)))
+
+	subtype := "scout_ahead_fail"
+	if sneakResult.Success {
+		subtype = "scout_ahead_success"
+		s.incrementStat(charID, "successful_sneaks", 1)
+	}
+	s.logEvent("stealth", subtype, charID, string(char.Class), targetRoomID, map[string]interface{}{
+		"roll": sneakResult.Roll, "dc": sneakResult.DC,
+	})
+
+	if sneakResult.Success {
+		// Move only the thief to target room
+		char.CurrentRoomID = targetRoomID
+		isFirstVisit := !s.state.IsRoomVisited(targetRoomID)
+		s.state.MarkRoomVisited(targetRoomID)
+
+		// Handle traps on first visit using solo detection
+		if isFirstVisit {
+			roomTraps := s.state.GetRoomTraps(targetRoomID)
+			for _, trap := range roomTraps {
+				if trap.Location == game.TrapRoom && !trap.IsTriggered && !trap.IsDisarmed {
+					detection := game.CheckTrapDetectionSolo(char, trap, s.rng)
+					if detection.Detected {
+						sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapDetection(detection)))
+					} else {
+						// Trap triggers on the thief
+						trigger := game.TriggerTrap(trap, char, s.rng)
+						sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapTrigger(trigger)))
+						if !char.IsAlive {
+							s.state.GameOver = true
+							s.finalizeSession("party_wipe")
+							sb.WriteString("\nThe scout has fallen! Game over.\nUse 'new_game' to play again.")
+							return s.textResult(sb.String()), nil
+						}
+					}
+				}
+			}
+		}
+
+		// Init scout combat
+		cs := game.InitScoutCombat(char, monsters, previousRoomID, s.rng)
+		s.state.Combat = cs
+		s.state.Mode = game.ModeCombat
+		s.retreated = make(map[string]bool)
+
+		sb.WriteString(fmt.Sprintf("\n=== SURPRISE ROUND ===\n"))
+		sb.WriteString(fmt.Sprintf("%s enters alone! Enemies are unaware.\n\n", char.Name))
+
+		sb.WriteString(fmt.Sprintf("Enemies (%d):\n", len(monsters)))
+		for _, m := range monsters {
+			sb.WriteString(fmt.Sprintf("  - %s (HP: %d/%d)\n", m.Name, m.HP, m.MaxHP))
+		}
+
+		sb.WriteString(fmt.Sprintf("\n%s has a surprise round with double movement (%d cells)!\n",
+			char.Name, char.GetMovementRange()*2))
+		sb.WriteString("Use combat_move and combat_attack, then choose signal_party or combat_retreat.\n")
+	} else {
+		// Sneak failed: full party enters, normal combat
+		sb.WriteString("\nDetected! The whole party rushes in!\n")
+		s.state.Party.MoveAllToRoom(targetRoomID)
+		isFirstVisit := !s.state.IsRoomVisited(targetRoomID)
+		s.state.MarkRoomVisited(targetRoomID)
+
+		// Handle traps on first visit (full party detection)
+		if isFirstVisit {
+			roomTraps := s.state.GetRoomTraps(targetRoomID)
+			for _, trap := range roomTraps {
+				if trap.Location == game.TrapRoom && !trap.IsTriggered && !trap.IsDisarmed {
+					detection := game.CheckTrapDetection(s.state.Party, trap, s.rng)
+					if detection.Detected {
+						sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapDetection(detection)))
+					} else {
+						point := s.state.Party.PointCharacter()
+						if point != nil {
+							trigger := game.TriggerTrap(trap, point, s.rng)
+							sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapTrigger(trigger)))
+							if s.state.Party.IsWiped() {
+								s.state.GameOver = true
+								s.finalizeSession("party_wipe")
+								sb.WriteString("\nYour entire party has fallen. Game over.\nUse 'new_game' to play again.")
+								return s.textResult(sb.String()), nil
+							}
+						}
+					}
+				}
+			}
+		}
+
+		combatMsg := s.enterCombat(previousRoomID, nil)
+		sb.WriteString(combatMsg)
+	}
+
+	return s.textResult(sb.String()), nil
+}
+
+// handleSignalParty brings the rest of the party into scout combat
+func (s *Server) handleSignalParty(charID string) (*ToolResult, error) {
+	if err := s.requireCombat(); err != nil {
+		return err, nil
+	}
+
+	cs := s.state.Combat
+	if !cs.AwaitingScoutDecision {
+		return s.textResult("Not awaiting a scout decision. Use this after a scout_ahead surprise round."), nil
+	}
+	if charID != cs.ScoutID {
+		return s.textResult("Only the scouting thief can signal the party."), nil
+	}
+
+	scout := s.state.Party.GetCharacter(charID)
+	if scout == nil {
+		return s.textResult("Scout not found."), nil
+	}
+
+	// Move all party to scout's room
+	s.state.Party.MoveAllToRoom(scout.CurrentRoomID)
+
+	// Add remaining party members to combat
+	monsters := s.state.GetRoomMonsters(scout.CurrentRoomID)
+	game.AddPartyToCombat(cs, s.state.Party, monsters, s.rng)
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%s signals the party! They rush into the room.\n\n", scout.Name))
+
+	sb.WriteString("Initiative order:\n")
+	for _, c := range cs.Combatants {
+		if !c.IsAlive {
+			continue
+		}
+		side := "ALLY"
+		if !c.IsPlayerChar {
+			side = "ENEMY"
+		}
+		sb.WriteString(fmt.Sprintf("  %s [%s] — Init: %d, HP: %d/%d, Pos: (%d,%d)\n",
+			c.Name, side, c.Initiative, c.HP, c.MaxHP, c.GridX, c.GridY))
+	}
+
+	// Run monster turns if first combatant is a monster
+	current := cs.GetCurrentCombatant()
+	if current != nil && !current.IsPlayerChar {
+		sb.WriteString(s.runMonsterTurns())
+	} else if current != nil {
+		sb.WriteString(fmt.Sprintf("\n%s's turn! Use combat tools.\n", current.Name))
+	}
+
+	return s.textResult(sb.String()), nil
 }

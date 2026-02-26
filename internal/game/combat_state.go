@@ -147,6 +147,179 @@ func InitCombat(party *Party, monsters []*Monster, previousRoomID string, sneakR
 	return cs
 }
 
+// InitScoutCombat creates a combat state with only the scouting thief on the grid.
+// Monsters are placed but frozen (0 initiative). The thief gets initiative 100 (guaranteed first)
+// and starts hidden.
+func InitScoutCombat(thief *Character, monsters []*Monster, previousRoomID string, rng *rand.Rand) *CombatState {
+	cs := &CombatState{
+		Combatants:     make([]*Combatant, 0),
+		CurrentTurnIdx: 0,
+		RoundNumber:    1,
+		Engagements:    make(map[string]string),
+		IsActive:       true,
+		PreviousRoomID: previousRoomID,
+		IsScoutPhase:   true,
+		ScoutID:        thief.ID,
+	}
+
+	// Initialize grid
+	for y := 0; y < GridHeight; y++ {
+		for x := 0; x < GridWidth; x++ {
+			cs.Grid[y][x] = &GridCell{X: x, Y: y}
+		}
+	}
+
+	// Place thief in row 0, centered, hidden
+	startX := GridWidth / 2
+	thiefCombatant := &Combatant{
+		ID:           thief.ID,
+		Name:         thief.Name,
+		IsPlayerChar: true,
+		CharacterID:  thief.ID,
+		HP:           thief.HP,
+		MaxHP:        thief.MaxHP,
+		GridX:        startX,
+		GridY:        0,
+		IsAlive:      true,
+		IsHidden:     true,
+		Initiative:   100, // guaranteed first
+	}
+	cs.Combatants = append(cs.Combatants, thiefCombatant)
+	cs.Grid[0][startX].OccupantID = &thief.ID
+
+	// Place monsters in rows 4-5, centered, with 0 initiative (frozen)
+	monsterStartX := (GridWidth - len(monsters)) / 2
+	if monsterStartX < 0 {
+		monsterStartX = 0
+	}
+	for i, m := range monsters {
+		x := monsterStartX + i
+		if x >= GridWidth {
+			x = GridWidth - 1
+		}
+		placed := false
+		for _, py := range []int{5, 4} {
+			for px := x; px < GridWidth; px++ {
+				if cs.Grid[py][px].OccupantID == nil {
+					combatant := &Combatant{
+						ID:           m.ID,
+						Name:         m.Name,
+						IsPlayerChar: false,
+						CharacterID:  m.ID,
+						HP:           m.HP,
+						MaxHP:        m.MaxHP,
+						GridX:        px,
+						GridY:        py,
+						IsAlive:      true,
+						Initiative:   0, // frozen
+					}
+					cs.Combatants = append(cs.Combatants, combatant)
+					cs.Grid[py][px].OccupantID = &m.ID
+					placed = true
+					break
+				}
+			}
+			if placed {
+				break
+			}
+		}
+	}
+
+	// Sort: thief first (initiative 100), then monsters (initiative 0)
+	sort.SliceStable(cs.Combatants, func(i, j int) bool {
+		return cs.Combatants[i].Initiative > cs.Combatants[j].Initiative
+	})
+
+	return cs
+}
+
+// AddPartyToCombat places remaining alive party members into an existing scout combat,
+// re-rolls initiative for everyone, and clears the scout phase flags.
+func AddPartyToCombat(cs *CombatState, party *Party, monsters []*Monster, rng *rand.Rand) {
+	// Place remaining alive party members (skip the scout who is already in combat)
+	newMembers := make([]*Character, 0)
+	for _, c := range party.AliveCharacters() {
+		if c.ID == cs.ScoutID {
+			continue
+		}
+		newMembers = append(newMembers, c)
+	}
+
+	// Find open cells in rows 0-1 for new party members
+	for _, c := range newMembers {
+		placed := false
+		for _, py := range []int{0, 1} {
+			for px := 0; px < GridWidth; px++ {
+				if cs.Grid[py][px].OccupantID == nil {
+					combatant := &Combatant{
+						ID:           c.ID,
+						Name:         c.Name,
+						IsPlayerChar: true,
+						CharacterID:  c.ID,
+						HP:           c.HP,
+						MaxHP:        c.MaxHP,
+						GridX:        px,
+						GridY:        py,
+						IsAlive:      true,
+					}
+					cs.Combatants = append(cs.Combatants, combatant)
+					cs.Grid[py][px].OccupantID = &c.ID
+					placed = true
+					break
+				}
+			}
+			if placed {
+				break
+			}
+		}
+	}
+
+	// Re-roll initiative for ALL combatants
+	for _, c := range cs.Combatants {
+		roll := rng.Intn(20) + 1
+		dexBonus := 0
+		initBonus := 0
+
+		if c.IsPlayerChar {
+			char := party.GetCharacter(c.CharacterID)
+			if char != nil {
+				dexBonus = char.Dexterity / 2
+				initBonus = char.GetInitiativeBonus()
+			}
+		} else {
+			for _, m := range monsters {
+				if m.ID == c.CharacterID {
+					dexBonus = m.Dexterity / 2
+					break
+				}
+			}
+		}
+
+		c.Initiative = roll + dexBonus + initBonus
+	}
+
+	// Sort by initiative (descending), ties: players first, then alphabetical
+	sort.SliceStable(cs.Combatants, func(i, j int) bool {
+		if cs.Combatants[i].Initiative != cs.Combatants[j].Initiative {
+			return cs.Combatants[i].Initiative > cs.Combatants[j].Initiative
+		}
+		if cs.Combatants[i].IsPlayerChar != cs.Combatants[j].IsPlayerChar {
+			return cs.Combatants[i].IsPlayerChar
+		}
+		return cs.Combatants[i].Name < cs.Combatants[j].Name
+	})
+
+	// Clear scout phase flags and reset turn state
+	cs.IsScoutPhase = false
+	cs.AwaitingScoutDecision = false
+	cs.CurrentTurnIdx = 0
+	cs.RoundNumber = 1
+	for _, c := range cs.Combatants {
+		c.HasMoved = false
+		c.HasActed = false
+	}
+}
+
 // GetCurrentCombatant returns the combatant whose turn it is
 func (cs *CombatState) GetCurrentCombatant() *Combatant {
 	if cs.CurrentTurnIdx >= len(cs.Combatants) {

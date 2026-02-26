@@ -419,6 +419,98 @@ func TestBuildCombatView_KnownSpells(t *testing.T) {
 	}
 }
 
+func TestBuildCombatView_ScoutPhaseFields(t *testing.T) {
+	cs := newTestCombatState()
+	cs.IsScoutPhase = true
+	cs.AwaitingScoutDecision = true
+	cs.ScoutID = "p1"
+	cs.RoundNumber = 1
+
+	cv := buildCombatView(cs, NewGameState("test"))
+	if !cv.IsScoutPhase {
+		t.Error("IsScoutPhase should be true")
+	}
+	if !cv.AwaitingScoutDecision {
+		t.Error("AwaitingScoutDecision should be true")
+	}
+}
+
+func TestBuildCombatView_ScoutDoubleMovement(t *testing.T) {
+	gs := NewGameState("test")
+	party, err := NewParty([]PartyRequest{
+		{Name: "Shadow", Class: ClassThief},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	gs.Party = party
+
+	thief := party.GetCharacterByName("Shadow")
+
+	cs := newTestCombatState()
+	cs.IsScoutPhase = true
+	cs.ScoutID = thief.ID
+	cs.Combatants = []*Combatant{
+		{ID: thief.ID, Name: "Shadow", IsPlayerChar: true, CharacterID: thief.ID, IsAlive: true, HP: 22, MaxHP: 22},
+	}
+	cs.PlaceOnGrid(cs.Combatants[0], 3, 0)
+	gs.Combat = cs
+	gs.Mode = ModeCombat
+
+	cv := buildCombatView(cs, gs)
+
+	if len(cv.Combatants) != 1 {
+		t.Fatalf("expected 1 combatant, got %d", len(cv.Combatants))
+	}
+
+	// Thief base movement is 4, should be doubled to 8 during scout phase
+	if cv.Combatants[0].MovementRange != 8 {
+		t.Errorf("scout movementRange = %d, want 8 (4 * 2)", cv.Combatants[0].MovementRange)
+	}
+}
+
+func TestBuildCombatView_NonScoutNoDoubleMovement(t *testing.T) {
+	gs := NewGameState("test")
+	party, err := NewParty([]PartyRequest{
+		{Name: "Shadow", Class: ClassThief},
+		{Name: "Conan", Class: ClassFighter},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	gs.Party = party
+
+	thief := party.GetCharacterByName("Shadow")
+	fighter := party.GetCharacterByName("Conan")
+
+	// Non-scout-phase combat: movement should not be doubled
+	cs := newTestCombatState()
+	cs.IsScoutPhase = false
+	cs.Combatants = []*Combatant{
+		{ID: thief.ID, Name: "Shadow", IsPlayerChar: true, CharacterID: thief.ID, IsAlive: true, HP: 22, MaxHP: 22},
+		{ID: fighter.ID, Name: "Conan", IsPlayerChar: true, CharacterID: fighter.ID, IsAlive: true, HP: 30, MaxHP: 30},
+	}
+	cs.PlaceOnGrid(cs.Combatants[0], 0, 0)
+	cs.PlaceOnGrid(cs.Combatants[1], 1, 0)
+	gs.Combat = cs
+	gs.Mode = ModeCombat
+
+	cv := buildCombatView(cs, gs)
+
+	views := make(map[string]*CombatantView)
+	for _, v := range cv.Combatants {
+		views[v.Name] = v
+	}
+
+	// Normal movement ranges (no doubling)
+	if views["Shadow"].MovementRange != 4 {
+		t.Errorf("thief movementRange = %d, want 4 (no doubling)", views["Shadow"].MovementRange)
+	}
+	if views["Conan"].MovementRange != 2 {
+		t.Errorf("fighter movementRange = %d, want 2", views["Conan"].MovementRange)
+	}
+}
+
 func TestBuildSnapshot_CharacterInventory(t *testing.T) {
 	gs := NewGameState("test-session")
 	party, err := NewParty([]PartyRequest{

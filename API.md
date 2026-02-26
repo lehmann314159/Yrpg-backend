@@ -259,6 +259,35 @@ Thief scouts an adjacent room without entering. Reveals enemies, traps, and item
 
 ---
 
+#### `scout_ahead`
+
+Thief physically enters an adjacent room solo for a surprise round with double movement. If the sneak check succeeds, the thief enters combat alone with the enemies unaware. If it fails, the whole party rushes in for normal combat.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `character_id` | string | Yes | ID of the thief character |
+| `direction` | string | Yes | Direction to scout: `north`, `south`, `east`, `west` |
+
+**On sneak success:**
+1. Only the thief moves to the target room (party stays behind)
+2. Traps are checked using solo detection (thief only)
+3. Scout combat begins: thief is hidden with initiative 100, monsters are frozen
+4. Thief gets a surprise round with **double movement** (8 cells instead of 4)
+5. After acting, the thief must choose `signal_party` or `combat_retreat`
+
+**On sneak failure:**
+- Entire party enters the room and normal combat begins (no surprise round)
+
+**Errors:**
+- Character is not a thief
+- No exit in that direction
+- No enemies in target room (use `move` instead)
+- Currently in combat
+- Monsters in current room
+
+---
+
 #### `inventory`
 
 View all party members' inventories and equipment.
@@ -452,6 +481,31 @@ Attempt to flee combat. Triggers opportunity attacks from engaged enemies.
 3. Success: character is removed from the grid
 4. If all living party members retreat, the party flees to the previous room
 
+**Scout phase retreat:** During the scout decision phase, `combat_retreat` works differently:
+- **Not engaged:** Automatic success. Thief returns to the previous room, combat ends.
+- **Engaged:** Standard retreat roll. On success: thief returns, combat ends. On failure: party is automatically signaled and joins combat.
+
+---
+
+#### `signal_party`
+
+After a successful `scout_ahead` surprise round, signal the rest of the party to join combat. Only usable during the scout decision phase.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `character_id` | string | Yes | ID of the scouting thief |
+
+**Mechanics:**
+1. All party members move to the scout's room
+2. Remaining party members are placed on the combat grid (rows 0-1)
+3. Initiative is re-rolled for all combatants
+4. Scout phase ends; normal combat continues
+
+**Errors:**
+- Not in scout decision phase
+- Character is not the scout
+
 ---
 
 #### `end_turn`
@@ -637,6 +691,8 @@ interface CombatView {
   currentTurnIdx: number;
   roundNumber: number;
   isActive: boolean;
+  awaitingScoutDecision: boolean;  // true when scout must choose signal_party or combat_retreat
+  isScoutPhase: boolean;           // true during thief's surprise round (monsters frozen)
 }
 ```
 
@@ -668,7 +724,7 @@ interface CombatantView {
 |--------|-------|
 | Fighter | 2 |
 | Magic User | 2 |
-| Thief | 4 |
+| Thief | 4 (8 during scout phase) |
 | All monsters | 2 |
 
 **`attackRange` values:**
@@ -741,7 +797,7 @@ interface EventDetails {
 | `spell` | `spell_cast`, `combat_spell_cast` |
 | `item` | `consumable_used`, `scroll_success`, `scroll_fail`, `scroll_backfire` |
 | `trap` | `trap_detected`, `trap_triggered`, `trap_disarmed`, `disarm_failed` |
-| `stealth` | `sneak_success`, `sneak_fail`, `scout_success`, `scout_fail`, `hide_success`, `hide_fail` |
+| `stealth` | `sneak_success`, `sneak_fail`, `scout_success`, `scout_fail`, `scout_ahead_success`, `scout_ahead_fail`, `hide_success`, `hide_fail` |
 | `movement` | `room_enter` |
 | `interaction` | `game_start`, `rest` |
 | `death` | `character_killed`, `enemy_defeated`, `party_wipe` |
@@ -965,7 +1021,9 @@ Monsters act automatically after player turns:
       ],
       "currentTurnIdx": 1,
       "roundNumber": 2,
-      "isActive": true
+      "isActive": true,
+      "awaitingScoutDecision": false,
+      "isScoutPhase": false
     },
     "gameOver": false,
     "victory": false,

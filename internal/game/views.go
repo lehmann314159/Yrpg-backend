@@ -14,8 +14,9 @@ type CharacterView struct {
 	SpellSlots    int      `json:"spellSlots"`
 	MaxSpellSlots int      `json:"maxSpellSlots"`
 	KnownSpells   []string `json:"knownSpells,omitempty"`
-	IsAlive       bool     `json:"isAlive"`
-	Status        string   `json:"status"`
+	IsAlive       bool        `json:"isAlive"`
+	Status        string      `json:"status"`
+	Inventory     []*ItemView `json:"inventory"`
 }
 
 type PartyView struct {
@@ -130,7 +131,7 @@ func (gs *GameState) BuildSnapshot() *GameStateSnapshot {
 
 	// Party
 	if gs.Party != nil {
-		snap.Party = buildPartyView(gs.Party)
+		snap.Party = buildPartyView(gs.Party, gs)
 	}
 
 	// Current room
@@ -166,13 +167,19 @@ func (gs *GameState) BuildSnapshot() *GameStateSnapshot {
 
 // --- View Builders ---
 
-func buildPartyView(p *Party) *PartyView {
+func buildPartyView(p *Party, gs *GameState) *PartyView {
 	pv := &PartyView{
 		Characters: make([]*CharacterView, 0, len(p.Characters)),
 		Formation:  p.Formation,
 	}
 	for _, c := range p.Characters {
-		pv.Characters = append(pv.Characters, buildCharacterView(c))
+		cv := buildCharacterView(c)
+		inv := gs.GetCharacterInventory(c.ID)
+		cv.Inventory = make([]*ItemView, 0, len(inv))
+		for _, item := range inv {
+			cv.Inventory = append(cv.Inventory, buildItemView(item))
+		}
+		pv.Characters = append(pv.Characters, cv)
 	}
 	return pv
 }

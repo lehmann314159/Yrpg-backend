@@ -271,3 +271,93 @@ func TestBuildCombatView_BlockedCell(t *testing.T) {
 		t.Errorf("blocked cell = %q, want 'blocked'", cv.Grid[3][3])
 	}
 }
+
+func TestBuildSnapshot_CharacterInventory(t *testing.T) {
+	gs := NewGameState("test-session")
+	party, err := NewParty([]PartyRequest{
+		{Name: "Archer", Class: ClassFighter},
+		{Name: "Mage", Class: ClassMagicUser},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	gs.Party = party
+	gs.Dungeon = &Dungeon{ID: "d1", Depth: 1}
+
+	room := &Room{ID: "room1", Name: "Test Room", X: 0, Y: 0}
+	gs.AddRoom(room)
+	party.MoveAllToRoom(room.ID)
+
+	// Add items to Archer's inventory
+	archerID := party.Characters[0].ID
+	gs.AddItem(&Item{
+		ID:          "sword1",
+		Name:        "Iron Sword",
+		Type:        ItemWeapon,
+		Damage:      5,
+		Range:       RangeMelee,
+		Rarity:      "common",
+		CharacterID: &archerID,
+		IsEquipped:  true,
+	})
+	gs.AddItem(&Item{
+		ID:          "shield1",
+		Name:        "Wooden Shield",
+		Type:        ItemArmor,
+		Armor:       2,
+		Rarity:      "common",
+		CharacterID: &archerID,
+	})
+
+	snap := gs.BuildSnapshot()
+	if snap.Party == nil {
+		t.Fatal("snapshot party is nil")
+	}
+
+	var archerView, mageView *CharacterView
+	for _, cv := range snap.Party.Characters {
+		switch cv.Name {
+		case "Archer":
+			archerView = cv
+		case "Mage":
+			mageView = cv
+		}
+	}
+
+	if archerView == nil {
+		t.Fatal("archer view not found")
+	}
+	if mageView == nil {
+		t.Fatal("mage view not found")
+	}
+
+	// Archer should have 2 items
+	if len(archerView.Inventory) != 2 {
+		t.Fatalf("archer inventory count = %d, want 2", len(archerView.Inventory))
+	}
+
+	// Check that at least one item is equipped
+	foundEquipped := false
+	for _, iv := range archerView.Inventory {
+		if iv.Name == "Iron Sword" {
+			if !iv.IsEquipped {
+				t.Error("Iron Sword should be equipped")
+			}
+			if iv.Type != "weapon" {
+				t.Errorf("Iron Sword type = %q, want weapon", iv.Type)
+			}
+			foundEquipped = true
+		}
+	}
+	if !foundEquipped {
+		t.Error("did not find Iron Sword in archer inventory")
+	}
+
+	// Mage should have an empty (non-nil) inventory
+	if mageView.Inventory == nil {
+		t.Fatal("mage inventory should be non-nil")
+	}
+	if len(mageView.Inventory) != 0 {
+		t.Errorf("mage inventory count = %d, want 0", len(mageView.Inventory))
+	}
+}

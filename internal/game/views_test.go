@@ -600,3 +600,76 @@ func TestBuildSnapshot_CharacterInventory(t *testing.T) {
 		t.Errorf("mage inventory count = %d, want 0", len(mageView.Inventory))
 	}
 }
+
+func TestCharacterView_AC_BaseOnly(t *testing.T) {
+	gs := NewGameState("s1")
+	party, _ := NewParty([]PartyRequest{{Name: "Fighter", Class: ClassFighter}})
+	gs.Party = party
+	room := &Room{ID: "r1", X: 0, Y: 0}
+	gs.AddRoom(room)
+	party.MoveAllToRoom("r1")
+
+	snap := gs.BuildSnapshot()
+	cv := snap.Party.Characters[0]
+	if cv.AC != 10 {
+		t.Errorf("base AC = %d, want 10", cv.AC)
+	}
+}
+
+func TestCharacterView_AC_WithArmor(t *testing.T) {
+	gs := NewGameState("s1")
+	party, _ := NewParty([]PartyRequest{{Name: "Fighter", Class: ClassFighter}})
+	gs.Party = party
+	room := &Room{ID: "r1", X: 0, Y: 0}
+	gs.AddRoom(room)
+	party.MoveAllToRoom("r1")
+
+	armorID := "armor1"
+	gs.AddItem(&Item{ID: armorID, Name: "Chain Mail", Type: ItemArmor, Armor: 3, Rarity: "common"})
+	party.Characters[0].EquippedArmorID = &armorID
+
+	snap := gs.BuildSnapshot()
+	cv := snap.Party.Characters[0]
+	if cv.AC != 13 {
+		t.Errorf("AC with armor = %d, want 13", cv.AC)
+	}
+}
+
+func TestCharacterView_AC_WithArmorAndBuffs(t *testing.T) {
+	gs := NewGameState("s1")
+	party, _ := NewParty([]PartyRequest{{Name: "Fighter", Class: ClassFighter}})
+	gs.Party = party
+	room := &Room{ID: "r1", X: 0, Y: 0}
+	gs.AddRoom(room)
+	party.MoveAllToRoom("r1")
+
+	armorID := "armor1"
+	gs.AddItem(&Item{ID: armorID, Name: "Chain Mail", Type: ItemArmor, Armor: 3, Rarity: "common"})
+	party.Characters[0].EquippedArmorID = &armorID
+
+	// Set up combat with a shield buff on the fighter
+	gs.Mode = ModeCombat
+	cs := newTestCombatState()
+	combatant := &Combatant{
+		ID:           party.Characters[0].ID,
+		CharacterID:  party.Characters[0].ID,
+		Name:         "Fighter",
+		IsPlayerChar: true,
+		IsAlive:      true,
+		HP:           30,
+		MaxHP:        30,
+		Buffs: []Buff{
+			{Type: BuffACBonus, Value: 4, RoundsLeft: 3}, // shield spell
+		},
+	}
+	cs.Combatants = []*Combatant{combatant}
+	cs.PlaceOnGrid(combatant, 0, 0)
+	gs.Combat = cs
+
+	snap := gs.BuildSnapshot()
+	cv := snap.Party.Characters[0]
+	// 10 base + 3 armor + 4 shield buff = 17
+	if cv.AC != 17 {
+		t.Errorf("AC with armor + buff = %d, want 17", cv.AC)
+	}
+}

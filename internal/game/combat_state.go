@@ -10,9 +10,20 @@ const (
 	GridHeight = 6
 )
 
+// charArmorBonus returns the armor bonus for a character based on their equipped armor.
+func charArmorBonus(c *Character, items map[string]*Item) int {
+	if c.EquippedArmorID == nil {
+		return 0
+	}
+	if armor, ok := items[*c.EquippedArmorID]; ok {
+		return armor.Armor
+	}
+	return 0
+}
+
 // InitCombat creates a new CombatState from the party and monsters in the room.
 // If sneakResult is non-nil and successful, the thief starts hidden with a surprise round.
-func InitCombat(party *Party, monsters []*Monster, previousRoomID string, sneakResult *SneakResult, rng *rand.Rand) *CombatState {
+func InitCombat(party *Party, monsters []*Monster, previousRoomID string, sneakResult *SneakResult, items map[string]*Item, rng *rand.Rand) *CombatState {
 	cs := &CombatState{
 		Combatants:     make([]*Combatant, 0),
 		CurrentTurnIdx: 0,
@@ -44,6 +55,7 @@ func InitCombat(party *Party, monsters []*Monster, previousRoomID string, sneakR
 			GridX:        x,
 			GridY:        0,
 			IsAlive:      true,
+			ArmorBonus:   charArmorBonus(c, items),
 		}
 
 		// Check if thief started hidden
@@ -150,7 +162,7 @@ func InitCombat(party *Party, monsters []*Monster, previousRoomID string, sneakR
 // InitScoutCombat creates a combat state with only the scouting thief on the grid.
 // Monsters are placed but frozen (0 initiative). The thief gets initiative 100 (guaranteed first)
 // and starts hidden.
-func InitScoutCombat(thief *Character, monsters []*Monster, previousRoomID string, rng *rand.Rand) *CombatState {
+func InitScoutCombat(thief *Character, monsters []*Monster, previousRoomID string, items map[string]*Item, rng *rand.Rand) *CombatState {
 	cs := &CombatState{
 		Combatants:     make([]*Combatant, 0),
 		CurrentTurnIdx: 0,
@@ -182,6 +194,7 @@ func InitScoutCombat(thief *Character, monsters []*Monster, previousRoomID strin
 		GridY:        0,
 		IsAlive:      true,
 		IsHidden:     true,
+		ArmorBonus:   charArmorBonus(thief, items),
 		Initiative:   100, // guaranteed first
 	}
 	cs.Combatants = append(cs.Combatants, thiefCombatant)
@@ -235,7 +248,7 @@ func InitScoutCombat(thief *Character, monsters []*Monster, previousRoomID strin
 
 // AddPartyToCombat places remaining alive party members into an existing scout combat,
 // re-rolls initiative for everyone, and clears the scout phase flags.
-func AddPartyToCombat(cs *CombatState, party *Party, monsters []*Monster, rng *rand.Rand) {
+func AddPartyToCombat(cs *CombatState, party *Party, monsters []*Monster, items map[string]*Item, rng *rand.Rand) {
 	// Place remaining alive party members (skip the scout who is already in combat)
 	newMembers := make([]*Character, 0)
 	for _, c := range party.AliveCharacters() {
@@ -261,6 +274,7 @@ func AddPartyToCombat(cs *CombatState, party *Party, monsters []*Monster, rng *r
 						GridX:        px,
 						GridY:        py,
 						IsAlive:      true,
+						ArmorBonus:   charArmorBonus(c, items),
 					}
 					cs.Combatants = append(cs.Combatants, combatant)
 					cs.Grid[py][px].OccupantID = &c.ID
@@ -485,9 +499,9 @@ func (c *Combatant) AddBuff(buffType BuffType, value, rounds int, source string)
 	})
 }
 
-// GetACBonus returns total AC bonus from buffs (including defend action)
+// GetACBonus returns total AC bonus from armor and buffs (including defend action)
 func (c *Combatant) GetACBonus() int {
-	bonus := 0
+	bonus := c.ArmorBonus
 	for _, b := range c.Buffs {
 		if b.Type == BuffACBonus {
 			bonus += b.Value

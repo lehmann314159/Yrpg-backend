@@ -381,7 +381,7 @@ func (s *Server) handleCombatRetreat(charID string) (*ToolResult, error) {
 		sb.WriteString(fmt.Sprintf("%s is caught! The party rushes in!\n", char.Name))
 		monsters := s.state.GetRoomMonsters(char.CurrentRoomID)
 		s.state.Party.MoveAllToRoom(char.CurrentRoomID)
-		game.AddPartyToCombat(cs, s.state.Party, monsters, s.rng)
+		game.AddPartyToCombat(cs, s.state.Party, monsters, s.state.Items, s.rng)
 
 		// Show initiative order
 		sb.WriteString("\nNew initiative order:\n")
@@ -632,7 +632,7 @@ func (s *Server) generateAmbushMonsters(depth int, roomID string) []*game.Monste
 // enterAmbushCombat starts combat from an ambush with optional surprise round for monsters
 func (s *Server) enterAmbushCombat(roomID string, monsters []*game.Monster, surpriseRound bool) string {
 	// Use the existing InitCombat but with no sneak result (party didn't sneak)
-	cs := game.InitCombat(s.state.Party, monsters, roomID, nil, s.rng)
+	cs := game.InitCombat(s.state.Party, monsters, roomID, nil, s.state.Items, s.rng)
 	s.state.Combat = cs
 	s.state.Mode = game.ModeCombat
 	s.retreated = make(map[string]bool)
@@ -694,7 +694,7 @@ func (s *Server) enterCombat(previousRoomID string, sneakResult *game.SneakResul
 		return ""
 	}
 
-	cs := game.InitCombat(s.state.Party, monsters, previousRoomID, sneakResult, s.rng)
+	cs := game.InitCombat(s.state.Party, monsters, previousRoomID, sneakResult, s.state.Items, s.rng)
 	s.state.Combat = cs
 	s.state.Mode = game.ModeCombat
 	s.retreated = make(map[string]bool)
@@ -1035,7 +1035,7 @@ func (s *Server) handleScoutAhead(charID, direction string) (*ToolResult, error)
 		}
 
 		// Init scout combat
-		cs := game.InitScoutCombat(char, monsters, previousRoomID, s.rng)
+		cs := game.InitScoutCombat(char, monsters, previousRoomID, s.state.Items, s.rng)
 		s.state.Combat = cs
 		s.state.Mode = game.ModeCombat
 		s.retreated = make(map[string]bool)
@@ -1114,7 +1114,7 @@ func (s *Server) handleSignalParty(charID string) (*ToolResult, error) {
 
 	// Add remaining party members to combat
 	monsters := s.state.GetRoomMonsters(scout.CurrentRoomID)
-	game.AddPartyToCombat(cs, s.state.Party, monsters, s.rng)
+	game.AddPartyToCombat(cs, s.state.Party, monsters, s.state.Items, s.rng)
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("%s signals the party! They rush into the room.\n\n", scout.Name))

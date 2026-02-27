@@ -110,6 +110,7 @@ type Combatant struct {
 	HasActed     bool    `json:"has_acted"`
 	IsAlive      bool    `json:"is_alive"`
 	IsHidden     bool    `json:"is_hidden"`
+	ArmorBonus   int     `json:"armor_bonus"`
 	EngagedWith  *string `json:"engaged_with,omitempty"`
 	Buffs        []Buff  `json:"buffs,omitempty"`
 }

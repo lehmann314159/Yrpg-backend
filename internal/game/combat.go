@@ -384,7 +384,7 @@ func AttemptRetreat(cs *CombatState, combatant *Combatant, char *Character, rng 
 				TargetName:   combatant.Name,
 				Roll:         oaRoll,
 			}
-			if oaRoll >= BaseDefense {
+			if oaRoll >= BaseDefense+combatant.GetACBonus() {
 				oaResult.Hit = true
 				oaResult.Damage = oaDmg
 				combatant.HP -= oaDmg

@@ -19,7 +19,7 @@ func TestInitCombat(t *testing.T) {
 	}
 
 	rng := rand.New(rand.NewSource(42))
-	cs := InitCombat(party, monsters, "prev-room", nil, rng)
+	cs := InitCombat(party, monsters, "prev-room", nil, nil, rng)
 
 	if !cs.IsActive {
 		t.Error("combat should be active")
@@ -217,6 +217,50 @@ func TestAddBuff_GetACBonus(t *testing.T) {
 	}
 }
 
+func TestGetACBonus_IncludesArmor(t *testing.T) {
+	c := &Combatant{ID: "c1", ArmorBonus: 3}
+	if c.GetACBonus() != 3 {
+		t.Errorf("AC bonus with armor = %d, want 3", c.GetACBonus())
+	}
+
+	c.AddBuff(BuffACBonus, 4, 2, "Shield")
+	if c.GetACBonus() != 7 {
+		t.Errorf("AC bonus with armor + shield = %d, want 7", c.GetACBonus())
+	}
+}
+
+func TestInitCombat_SetsArmorBonus(t *testing.T) {
+	party, _ := NewParty([]PartyRequest{
+		{Name: "Fighter", Class: ClassFighter},
+	})
+
+	armorID := "armor1"
+	items := map[string]*Item{
+		armorID: {ID: armorID, Name: "Chain Mail", Type: ItemArmor, Armor: 3},
+	}
+	party.Characters[0].EquippedArmorID = &armorID
+
+	monsters := []*Monster{{ID: "m1", Name: "Goblin", HP: 10, MaxHP: 10, IsAlive: true}}
+	rng := rand.New(rand.NewSource(42))
+	cs := InitCombat(party, monsters, "prev-room", nil, items, rng)
+
+	var fighter *Combatant
+	for _, c := range cs.Combatants {
+		if c.ID == party.Characters[0].ID {
+			fighter = c
+		}
+	}
+	if fighter == nil {
+		t.Fatal("fighter combatant not found")
+	}
+	if fighter.ArmorBonus != 3 {
+		t.Errorf("ArmorBonus = %d, want 3", fighter.ArmorBonus)
+	}
+	if fighter.GetACBonus() != 3 {
+		t.Errorf("GetACBonus = %d, want 3", fighter.GetACBonus())
+	}
+}
+
 func TestIsSleeping_RemoveSleep(t *testing.T) {
 	c := &Combatant{ID: "c1"}
 
@@ -320,7 +364,7 @@ func TestInitScoutCombat(t *testing.T) {
 	}
 
 	rng := rand.New(rand.NewSource(42))
-	cs := InitScoutCombat(thief, monsters, "prev-room", rng)
+	cs := InitScoutCombat(thief, monsters, "prev-room", nil, rng)
 
 	if !cs.IsActive {
 		t.Error("combat should be active")
@@ -384,7 +428,7 @@ func TestAddPartyToCombat(t *testing.T) {
 	}
 
 	rng := rand.New(rand.NewSource(42))
-	cs := InitScoutCombat(thief, monsters, "prev-room", rng)
+	cs := InitScoutCombat(thief, monsters, "prev-room", nil, rng)
 
 	// Verify only 2 combatants before adding party (thief + 1 monster)
 	if len(cs.Combatants) != 2 {
@@ -392,7 +436,7 @@ func TestAddPartyToCombat(t *testing.T) {
 	}
 
 	// Add party
-	AddPartyToCombat(cs, party, monsters, rng)
+	AddPartyToCombat(cs, party, monsters, nil, rng)
 
 	// Should now have 4 combatants (3 party + 1 monster)
 	if len(cs.Combatants) != 4 {
@@ -453,9 +497,9 @@ func TestAddPartyToCombat_SoloThief(t *testing.T) {
 	}
 
 	rng := rand.New(rand.NewSource(42))
-	cs := InitScoutCombat(thief, monsters, "prev-room", rng)
+	cs := InitScoutCombat(thief, monsters, "prev-room", nil, rng)
 
-	AddPartyToCombat(cs, party, monsters, rng)
+	AddPartyToCombat(cs, party, monsters, nil, rng)
 
 	// Should still have 2 combatants (thief + monster, no one else to add)
 	if len(cs.Combatants) != 2 {

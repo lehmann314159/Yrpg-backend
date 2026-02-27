@@ -14,6 +14,7 @@ type CharacterView struct {
 	SpellSlots    int      `json:"spellSlots"`
 	MaxSpellSlots int      `json:"maxSpellSlots"`
 	KnownSpells   []string `json:"knownSpells,omitempty"`
+	AC            int         `json:"ac"`
 	IsAlive       bool        `json:"isAlive"`
 	Status        string      `json:"status"`
 	Inventory     []*ItemView `json:"inventory"`
@@ -178,7 +179,7 @@ func buildPartyView(p *Party, gs *GameState) *PartyView {
 		Formation:  p.Formation,
 	}
 	for _, c := range p.Characters {
-		cv := buildCharacterView(c)
+		cv := buildCharacterView(c, gs)
 		inv := gs.GetCharacterInventory(c.ID)
 		cv.Inventory = make([]*ItemView, 0, len(inv))
 		for _, item := range inv {
@@ -189,7 +190,21 @@ func buildPartyView(p *Party, gs *GameState) *PartyView {
 	return pv
 }
 
-func buildCharacterView(c *Character) *CharacterView {
+func buildCharacterView(c *Character, gs *GameState) *CharacterView {
+	ac := BaseDefense
+	if c.EquippedArmorID != nil {
+		if armor, ok := gs.Items[*c.EquippedArmorID]; ok {
+			ac += armor.Armor
+		}
+	}
+	if gs.Combat != nil {
+		for _, comb := range gs.Combat.Combatants {
+			if comb.CharacterID == c.ID {
+				ac += comb.GetACBonus()
+				break
+			}
+		}
+	}
 	return &CharacterView{
 		ID:            c.ID,
 		Name:          c.Name,
@@ -202,6 +217,7 @@ func buildCharacterView(c *Character) *CharacterView {
 		SpellSlots:    c.SpellSlots,
 		MaxSpellSlots: c.MaxSpellSlots,
 		KnownSpells:   c.KnownSpells,
+		AC:            ac,
 		IsAlive:       c.IsAlive,
 		Status:        c.HealthStatus(),
 	}

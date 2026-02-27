@@ -573,6 +573,7 @@ interface CharacterView {
   spellSlots: number;              // 0 for non-magic_user
   maxSpellSlots: number;
   knownSpells: string[];           // empty for non-magic_user
+  ac: number;                      // effective AC: 10 + armor bonus + active buff bonuses
   isAlive: boolean;
   status: "Healthy" | "Wounded" | "Critical" | "Dead";
 }
@@ -915,6 +916,7 @@ Monsters act automatically after player turns:
           "spellSlots": 0,
           "maxSpellSlots": 0,
           "knownSpells": [],
+          "ac": 10,
           "isAlive": true,
           "status": "Healthy"
         },
@@ -930,6 +932,7 @@ Monsters act automatically after player turns:
           "spellSlots": 2,
           "maxSpellSlots": 3,
           "knownSpells": ["heal", "fireball"],
+          "ac": 10,
           "isAlive": true,
           "status": "Healthy"
         }

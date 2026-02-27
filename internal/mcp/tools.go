@@ -176,8 +176,21 @@ func (s *Server) handleLook() (*ToolResult, error) {
 		sb.WriteString("\n")
 	}
 
-	// Discovered traps
+	// Unopened chests
 	traps := s.state.GetRoomTraps(room.ID)
+	chestCount := 0
+	for _, trap := range traps {
+		if trap.Location == game.TrapChest && !trap.IsOpened {
+			chestCount++
+		}
+	}
+	if chestCount == 1 {
+		sb.WriteString("A chest sits in the room. Use 'open_chest' to open it.\n\n")
+	} else if chestCount > 1 {
+		sb.WriteString(fmt.Sprintf("%d chests sit in the room. Use 'open_chest' to open them.\n\n", chestCount))
+	}
+
+	// Discovered traps
 	for _, trap := range traps {
 		if trap.IsDiscovered && !trap.IsTriggered && !trap.IsDisarmed {
 			sb.WriteString(fmt.Sprintf("WARNING — Trap detected: %s (DC %d) [ID: %s]\n",
@@ -700,7 +713,7 @@ func (s *Server) scrollBackfire(caster *game.Character, item *game.Item) string 
 	}
 }
 
-// handleOpenChest opens a chest in the room (checks for chest traps)
+// handleOpenChest opens a chest in the room (checks for chest traps, reveals loot)
 func (s *Server) handleOpenChest(charID string) (*ToolResult, error) {
 	if err := s.requireExploration(); err != nil {
 		return err, nil
@@ -716,55 +729,70 @@ func (s *Server) handleOpenChest(charID string) (*ToolResult, error) {
 		return s.errorResult("Error: current room not found."), nil
 	}
 
-	// Find chest traps in this room
-	chestTraps := make([]*game.Trap, 0)
+	// Find unopened chest traps in this room
+	var chest *game.Trap
 	for _, trap := range s.state.GetRoomTraps(currentRoom.ID) {
-		if trap.Location == game.TrapChest && !trap.IsTriggered && !trap.IsDisarmed {
-			chestTraps = append(chestTraps, trap)
+		if trap.Location == game.TrapChest && !trap.IsOpened {
+			chest = trap
+			break
 		}
 	}
 
-	if len(chestTraps) == 0 {
-		return s.textResult("There is no trapped chest to open here."), nil
+	if chest == nil {
+		return s.textResult("There is no chest to open here."), nil
 	}
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("%s opens the chest...\n", char.Name))
 
-	for _, trap := range chestTraps {
-		// Check if already detected
-		if trap.IsDiscovered {
-			sb.WriteString(fmt.Sprintf("Warning: you know this chest is trapped! Use a thief to disarm it first.\n"))
-			continue
+	// Handle trapped chests that haven't been dealt with yet
+	if !chest.IsDisarmed && !chest.IsTriggered && chest.Damage > 0 {
+		if chest.IsDiscovered {
+			// Player already knows it's trapped — warn them
+			sb.WriteString("Warning: you know this chest is trapped! Use a thief to disarm it first.\n")
+			return s.textResult(sb.String()), nil
 		}
 
 		// Detection check
-		detection := game.CheckTrapDetection(s.state.Party, trap, s.rng)
+		detection := game.CheckTrapDetection(s.state.Party, chest, s.rng)
 		if detection.Detected {
 			sb.WriteString(fmt.Sprintf("%s\n", game.FormatTrapDetection(detection)))
 			sb.WriteString("The chest is trapped! Consider having a thief disarm it.\n")
-			s.logEvent("trap", "trap_detected", detection.DetectorID, "", trap.ID, map[string]interface{}{
-				"trap_type": "chest", "trap_desc": trap.Description,
+			s.logEvent("trap", "trap_detected", detection.DetectorID, "", chest.ID, map[string]interface{}{
+				"trap_type": "chest", "trap_desc": chest.Description,
 			})
-		} else {
-			// Trap triggers on the opener
-			trigger := game.TriggerTrap(trap, char, s.rng)
-			sb.WriteString(fmt.Sprintf("%s\n", game.FormatTrapTrigger(trigger)))
-			s.logEvent("trap", "trap_triggered", char.ID, string(char.Class), trap.ID, map[string]interface{}{
-				"trap_type": "chest", "damage": trigger.Damage,
-			})
-			if !char.IsAlive {
-				s.logEvent("death", "character_killed", char.ID, string(char.Class), trap.ID, map[string]interface{}{
-					"cause": "chest_trap",
-				})
-			}
-			if s.state.Party.IsWiped() {
-				s.state.GameOver = true
-				s.finalizeSession("party_wipe")
-				sb.WriteString("\nYour entire party has fallen. Game over.\nUse 'new_game' to play again.")
-				return s.textResult(sb.String()), nil
-			}
+			return s.textResult(sb.String()), nil
 		}
+
+		// Trap triggers on the opener, then fall through to reveal loot
+		trigger := game.TriggerTrap(chest, char, s.rng)
+		sb.WriteString(fmt.Sprintf("%s\n", game.FormatTrapTrigger(trigger)))
+		s.logEvent("trap", "trap_triggered", char.ID, string(char.Class), chest.ID, map[string]interface{}{
+			"trap_type": "chest", "damage": trigger.Damage,
+		})
+		if !char.IsAlive {
+			s.logEvent("death", "character_killed", char.ID, string(char.Class), chest.ID, map[string]interface{}{
+				"cause": "chest_trap",
+			})
+		}
+		if s.state.Party.IsWiped() {
+			s.state.GameOver = true
+			s.finalizeSession("party_wipe")
+			sb.WriteString("\nYour entire party has fallen. Game over.\nUse 'new_game' to play again.")
+			return s.textResult(sb.String()), nil
+		}
+	}
+
+	// Open the chest and reveal loot
+	chest.IsOpened = true
+	items := s.state.RevealChestItems(chest.ID)
+	if len(items) > 0 {
+		sb.WriteString("\nThe chest contains:\n")
+		for _, item := range items {
+			sb.WriteString(fmt.Sprintf("  - %s (%s, %s) [ID: %s]\n", item.Name, item.Type, item.Rarity, item.ID))
+		}
+	} else {
+		sb.WriteString("\nThe chest is empty.\n")
 	}
 
 	return s.textResult(sb.String()), nil
@@ -806,6 +834,18 @@ func (s *Server) handleDisarmTrap(charID, trapID string) (*ToolResult, error) {
 			"roll": result.Roll, "dc": result.DC,
 		})
 		s.incrementStat(charID, "traps_disarmed", 1)
+
+		// Chest trap: open and reveal loot on successful disarm
+		if trap.Location == game.TrapChest && !trap.IsOpened {
+			trap.IsOpened = true
+			items := s.state.RevealChestItems(trap.ID)
+			if len(items) > 0 {
+				sb.WriteString("\nThe chest contains:\n")
+				for _, item := range items {
+					sb.WriteString(fmt.Sprintf("  - %s (%s, %s) [ID: %s]\n", item.Name, item.Type, item.Rarity, item.ID))
+				}
+			}
+		}
 	} else {
 		s.logEvent("trap", "disarm_failed", charID, string(char.Class), trapID, map[string]interface{}{
 			"roll": result.Roll, "dc": result.DC,
@@ -819,6 +859,19 @@ func (s *Server) handleDisarmTrap(charID, trapID string) (*ToolResult, error) {
 			s.state.GameOver = true
 			s.finalizeSession("party_wipe")
 			sb.WriteString("\nYour entire party has fallen. Game over.\nUse 'new_game' to play again.")
+			return s.textResult(sb.String()), nil
+		}
+
+		// Chest trap: the chest still opens on failed disarm (trap triggered)
+		if trap.Location == game.TrapChest && !trap.IsOpened {
+			trap.IsOpened = true
+			items := s.state.RevealChestItems(trap.ID)
+			if len(items) > 0 {
+				sb.WriteString("\nDespite the trap, the chest contains:\n")
+				for _, item := range items {
+					sb.WriteString(fmt.Sprintf("  - %s (%s, %s) [ID: %s]\n", item.Name, item.Type, item.Rarity, item.ID))
+				}
+			}
 		}
 	}
 

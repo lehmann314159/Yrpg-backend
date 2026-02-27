@@ -673,3 +673,66 @@ func TestCharacterView_AC_WithArmorAndBuffs(t *testing.T) {
 		t.Errorf("AC with armor + buff = %d, want 17", cv.AC)
 	}
 }
+
+func TestBuildSnapshot_HidesChestItems(t *testing.T) {
+	gs := NewGameState("s1")
+	party, _ := NewParty([]PartyRequest{{Name: "Fighter", Class: ClassFighter}})
+	gs.Party = party
+	gs.Dungeon = &Dungeon{ID: "d1", Depth: 1}
+	room := &Room{ID: "r1", X: 0, Y: 0}
+	gs.AddRoom(room)
+	party.MoveAllToRoom("r1")
+
+	roomID := "r1"
+	chestID := "chest1"
+
+	// Normal floor item — should appear
+	gs.AddItem(&Item{ID: "i1", Name: "Sword", Type: ItemWeapon, Rarity: "common", RoomID: &roomID})
+	// Chest item — should be hidden
+	gs.AddItem(&Item{ID: "i2", Name: "Hidden Gem", Type: ItemTreasure, Rarity: "rare", RoomID: &roomID, ChestTrapID: &chestID})
+
+	snap := gs.BuildSnapshot()
+	if len(snap.RoomItems) != 1 {
+		t.Errorf("RoomItems count = %d, want 1 (chest item hidden)", len(snap.RoomItems))
+	}
+	if snap.RoomItems[0].Name != "Sword" {
+		t.Errorf("visible item = %q, want Sword", snap.RoomItems[0].Name)
+	}
+}
+
+func TestBuildSnapshot_UnopenedChestInTraps(t *testing.T) {
+	gs := NewGameState("s1")
+	party, _ := NewParty([]PartyRequest{{Name: "Fighter", Class: ClassFighter}})
+	gs.Party = party
+	gs.Dungeon = &Dungeon{ID: "d1", Depth: 1}
+	room := &Room{ID: "r1", X: 0, Y: 0}
+	gs.AddRoom(room)
+	party.MoveAllToRoom("r1")
+
+	// Unopened chest (not discovered, not opened) — should appear in RoomTraps
+	gs.AddTrap(&Trap{ID: "chest1", RoomID: "r1", Location: TrapChest, Description: "A chest.", IsOpened: false})
+	// Already-opened chest — should NOT appear
+	gs.AddTrap(&Trap{ID: "chest2", RoomID: "r1", Location: TrapChest, Description: "Empty chest.", IsOpened: true})
+
+	snap := gs.BuildSnapshot()
+	if len(snap.RoomTraps) != 1 {
+		t.Fatalf("RoomTraps count = %d, want 1", len(snap.RoomTraps))
+	}
+	if snap.RoomTraps[0].ID != "chest1" {
+		t.Errorf("trap ID = %q, want chest1", snap.RoomTraps[0].ID)
+	}
+}
+
+func TestBuildTrapView_LocationAndIsOpened(t *testing.T) {
+	trap := &Trap{ID: "t1", Description: "Chest trap", Location: TrapChest, IsDisarmed: true, IsOpened: true, Difficulty: 12}
+	tv := buildTrapView(trap)
+	if tv.Location != "chest" {
+		t.Errorf("Location = %q, want chest", tv.Location)
+	}
+	if !tv.IsOpened {
+		t.Error("IsOpened should be true")
+	}
+	if !tv.IsDisarmed {
+		t.Error("IsDisarmed should be true")
+	}
+}

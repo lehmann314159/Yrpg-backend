@@ -212,7 +212,7 @@ Use a consumable or scroll from a character's inventory.
 
 #### `open_chest`
 
-Open a chest in the current room. May trigger a chest trap.
+Open a chest in the current room. Reveals chest loot. May trigger a chest trap.
 
 **Arguments:**
 | Name | Type | Required | Description |
@@ -220,8 +220,13 @@ Open a chest in the current room. May trigger a chest trap.
 | `character_id` | string | Yes | ID of the character opening the chest |
 
 **Notes:**
+- Every chest contains 1-2 items (generated at dungeon creation, hidden until chest is opened)
+- Chest loot uses `difficulty + 1` with a 35% second item chance (vs 15% for floor drops)
 - If the chest trap was already discovered, warns the player to disarm first
 - If undetected, rolls trap detection; failure triggers the trap on the opener
+- After a trap triggers, the chest still opens and reveals its loot
+- Untrapped chests open immediately and reveal loot
+- The `look` command mentions any unopened chests in the room
 
 ---
 
@@ -239,6 +244,7 @@ Have a character attempt to disarm a discovered trap.
 - Thieves get +6 bonus
 - Success: trap disarmed permanently
 - Failure: trap triggers on the disarmer
+- For chest traps: loot is revealed on both success and failure (the chest opens either way)
 
 ---
 
@@ -532,7 +538,7 @@ interface GameStateSnapshot {
   currentRoom: RoomView | null;
   monsters: MonsterView[];
   roomItems: ItemView[];
-  roomTraps: TrapView[];           // only discovered traps
+  roomTraps: TrapView[];           // discovered traps + unopened chests
   combat: CombatView | null;
   mapGrid: MapCell[][];
   gameOver: boolean;
@@ -668,14 +674,16 @@ interface ItemView {
 
 ### TrapView
 
-Only discovered traps appear in the snapshot.
+Discovered traps and unopened chests appear in the snapshot.
 
 ```typescript
 interface TrapView {
   id: string;
   description: string;
+  location: "room" | "chest";
   isDisarmed: boolean;
-  difficulty: number;              // DC for disarm attempt
+  isOpened: boolean;               // true once chest has been opened (loot revealed)
+  difficulty: number;              // DC for disarm attempt (0 for untrapped chests)
 }
 ```
 

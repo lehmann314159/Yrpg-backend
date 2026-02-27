@@ -133,7 +133,7 @@ func (gs *GameState) HasMonstersInRoom(roomID string) bool {
 
 // --- Item accessors ---
 
-// GetRoomItems returns all items in a room
+// GetRoomItems returns all visible items in a room (excludes items still inside chests)
 func (gs *GameState) GetRoomItems(roomID string) []*Item {
 	items := make([]*Item, 0)
 	itemIDs, ok := gs.ItemsByRoom[roomID]
@@ -142,10 +142,26 @@ func (gs *GameState) GetRoomItems(roomID string) []*Item {
 	}
 	for itemID := range itemIDs {
 		if item, exists := gs.Items[itemID]; exists {
+			if item.ChestTrapID != nil {
+				continue
+			}
 			items = append(items, item)
 		}
 	}
 	return items
+}
+
+// RevealChestItems clears ChestTrapID on all items linked to the given trap,
+// making them visible as normal floor items. Returns the revealed items.
+func (gs *GameState) RevealChestItems(trapID string) []*Item {
+	revealed := make([]*Item, 0)
+	for _, item := range gs.Items {
+		if item.ChestTrapID != nil && *item.ChestTrapID == trapID {
+			item.ChestTrapID = nil
+			revealed = append(revealed, item)
+		}
+	}
+	return revealed
 }
 
 // GetCharacterInventory returns all items carried by a character

@@ -38,6 +38,9 @@ const (
 	ChestSpawnChance  = 0.20
 	ChestTrapChance   = 0.50
 
+	// Chest loot constants
+	ChestSecondItemChance = 0.35
+
 	// Description weighting
 	ScaryDescriptionDist   = 4
 	ScaryDescriptionChance = 0.5
@@ -427,8 +430,9 @@ func (dg *DungeonGenerator) PopulateRoom(room *game.Room, difficulty int) ([]*ga
 	// --- Items ---
 	items = dg.spawnItems(room, difficulty)
 
-	// --- Traps ---
-	traps = dg.spawnTraps(room, difficulty)
+	// --- Traps (may include chest loot items) ---
+	traps, chestItems := dg.spawnTraps(room, difficulty)
+	items = append(items, chestItems...)
 
 	return monsters, items, traps
 }
@@ -565,8 +569,9 @@ func (dg *DungeonGenerator) pickItem(room *game.Room, difficulty int) *game.Item
 	return item
 }
 
-func (dg *DungeonGenerator) spawnTraps(room *game.Room, difficulty int) []*game.Trap {
+func (dg *DungeonGenerator) spawnTraps(room *game.Room, difficulty int) ([]*game.Trap, []*game.Item) {
 	traps := make([]*game.Trap, 0)
+	chestItems := make([]*game.Item, 0)
 
 	// Room traps
 	trapChance := BaseTrapChance + float64(difficulty)*TrapChancePerDiff
@@ -581,17 +586,53 @@ func (dg *DungeonGenerator) spawnTraps(room *game.Room, difficulty int) []*game.
 		}
 	}
 
-	// Chest with possible trap
+	// Chest with possible trap — every chest gets a Trap entity and loot
 	if dg.random.Float64() < ChestSpawnChance {
+		var chest *game.Trap
 		if dg.random.Float64() < ChestTrapChance {
-			trap := dg.pickTrap(room, difficulty, chestTrapTemplates)
-			if trap != nil {
-				traps = append(traps, trap)
+			chest = dg.pickTrap(room, difficulty, chestTrapTemplates)
+		}
+		if chest == nil {
+			// Untrapped chest: benign trap entity so items have an ID to link to
+			chest = &game.Trap{
+				ID:          generateID(),
+				RoomID:      room.ID,
+				Location:    game.TrapChest,
+				Description: "A sturdy wooden chest.",
+				Damage:      0,
+				Difficulty:  0,
+				IsDisarmed:  true,
 			}
+		}
+		traps = append(traps, chest)
+		chestItems = append(chestItems, dg.spawnChestLoot(room, difficulty, chest.ID)...)
+	}
+
+	return traps, chestItems
+}
+
+// spawnChestLoot generates 1-2 items linked to a chest trap ID.
+// Uses difficulty+1 and a 35% second item chance to reward chest interaction.
+func (dg *DungeonGenerator) spawnChestLoot(room *game.Room, difficulty int, chestTrapID string) []*game.Item {
+	items := make([]*game.Item, 0, 2)
+
+	// Always one item at difficulty+1
+	item := dg.pickItem(room, difficulty+1)
+	if item != nil {
+		item.ChestTrapID = &chestTrapID
+		items = append(items, item)
+	}
+
+	// 35% chance of a second item
+	if dg.random.Float64() < ChestSecondItemChance {
+		item2 := dg.pickItem(room, difficulty+1)
+		if item2 != nil {
+			item2.ChestTrapID = &chestTrapID
+			items = append(items, item2)
 		}
 	}
 
-	return traps
+	return items
 }
 
 func (dg *DungeonGenerator) pickTrap(room *game.Room, difficulty int, templates []TrapTemplate) *game.Trap {

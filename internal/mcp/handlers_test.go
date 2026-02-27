@@ -653,3 +653,186 @@ func TestUseScroll_MagicUserLearnsSpell(t *testing.T) {
 		}
 	}
 }
+
+// --- Chest Loot ---
+
+func addChestWithLoot(s *Server, roomID string, trapped bool) string {
+	chestID := "chest_test"
+	trap := &game.Trap{
+		ID:          chestID,
+		RoomID:      roomID,
+		Location:    game.TrapChest,
+		Description: "A sturdy wooden chest.",
+		Damage:      0,
+		Difficulty:  0,
+		IsDisarmed:  true,
+	}
+	if trapped {
+		trap.Description = "A needle is hidden in the chest latch."
+		trap.Damage = 3
+		trap.Difficulty = 10
+		trap.IsDisarmed = false
+	}
+	s.state.AddTrap(trap)
+
+	// Add loot linked to chest
+	item := &game.Item{
+		ID:          "chest_item1",
+		Name:        "Ruby",
+		Description: "A glittering ruby.",
+		Type:        game.ItemTreasure,
+		Rarity:      "rare",
+		RoomID:      &roomID,
+		ChestTrapID: &chestID,
+	}
+	s.state.AddItem(item)
+
+	return chestID
+}
+
+func TestHandleOpenChest_UntrappedRevealsLoot(t *testing.T) {
+	s := newTestServer()
+	room := s.state.GetCurrentRoom()
+	fighter := getFighter(s)
+
+	addChestWithLoot(s, room.ID, false)
+
+	result, err := s.handleOpenChest(fighter.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := result.Content[0].Text
+
+	if !strings.Contains(text, "opens the chest") {
+		t.Errorf("expected open message, got: %s", text)
+	}
+	if !strings.Contains(text, "Ruby") {
+		t.Errorf("expected loot to be listed, got: %s", text)
+	}
+
+	// Item should now be visible via GetRoomItems
+	items := s.state.GetRoomItems(room.ID)
+	found := false
+	for _, item := range items {
+		if item.ID == "chest_item1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("chest item should be visible after opening")
+	}
+
+	// Chest should be marked opened
+	trap := s.state.Traps["chest_test"]
+	if !trap.IsOpened {
+		t.Error("chest trap should be marked IsOpened")
+	}
+}
+
+func TestHandleOpenChest_TrappedTriggersAndRevealsLoot(t *testing.T) {
+	s := newTestServer()
+	// Use a seed that gives low detection rolls (trap triggers)
+	s.rng = rand.New(rand.NewSource(1))
+	room := s.state.GetCurrentRoom()
+	fighter := getFighter(s)
+
+	addChestWithLoot(s, room.ID, true)
+
+	result, err := s.handleOpenChest(fighter.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := result.Content[0].Text
+
+	if !strings.Contains(text, "opens the chest") {
+		t.Errorf("expected open message, got: %s", text)
+	}
+
+	// Whether the trap was detected or triggered, check behavior
+	trap := s.state.Traps["chest_test"]
+	if trap.IsDiscovered && !trap.IsOpened {
+		// Detection succeeded — chest not opened yet, warn to disarm
+		if !strings.Contains(text, "trapped") {
+			t.Errorf("expected trap warning, got: %s", text)
+		}
+	} else if trap.IsOpened {
+		// Trap triggered, chest opened with loot
+		if !strings.Contains(text, "Ruby") {
+			t.Errorf("expected loot after trap trigger, got: %s", text)
+		}
+	}
+}
+
+func TestHandleDisarmTrap_ChestRevealsLoot(t *testing.T) {
+	s := newTestServer()
+	// Use seed that gives high disarm roll
+	s.rng = rand.New(rand.NewSource(99))
+	room := s.state.GetCurrentRoom()
+	thief := getThief(s)
+
+	chestID := addChestWithLoot(s, room.ID, true)
+
+	// Mark as discovered so we can disarm it
+	s.state.Traps[chestID].IsDiscovered = true
+
+	result, err := s.handleDisarmTrap(thief.ID, chestID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := result.Content[0].Text
+
+	trap := s.state.Traps[chestID]
+	if trap.IsDisarmed {
+		// Disarm succeeded — loot should be revealed
+		if !strings.Contains(text, "Ruby") {
+			t.Errorf("expected loot after disarm, got: %s", text)
+		}
+		if !trap.IsOpened {
+			t.Error("chest should be marked opened after disarm")
+		}
+	} else {
+		// Disarm failed — trap triggered, chest still opens
+		if !trap.IsOpened {
+			t.Error("chest should be opened even on failed disarm")
+		}
+	}
+}
+
+func TestHandleOpenChest_AlreadyOpenedReturnsNoChest(t *testing.T) {
+	s := newTestServer()
+	room := s.state.GetCurrentRoom()
+	fighter := getFighter(s)
+
+	addChestWithLoot(s, room.ID, false)
+
+	// Open it first
+	s.handleOpenChest(fighter.ID)
+
+	// Try again
+	result, err := s.handleOpenChest(fighter.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := result.Content[0].Text
+
+	if !strings.Contains(text, "no chest") {
+		t.Errorf("expected no-chest message, got: %s", text)
+	}
+}
+
+func TestHandleLook_MentionsChest(t *testing.T) {
+	s := newTestServer()
+	room := s.state.GetCurrentRoom()
+
+	addChestWithLoot(s, room.ID, false)
+
+	result, err := s.handleLook()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := result.Content[0].Text
+
+	if !strings.Contains(text, "chest") {
+		t.Errorf("expected chest mention in look output, got: %s", text)
+	}
+}

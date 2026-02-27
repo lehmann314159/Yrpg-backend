@@ -152,6 +152,7 @@ type Item struct {
 	RoomID           *string          `json:"room_id,omitempty"`
 	CharacterID      *string          `json:"character_id,omitempty"`
 	IsEquipped       bool             `json:"is_equipped"`
+	ChestTrapID      *string          `json:"chest_trap_id,omitempty"`
 }
 
 // --- Traps ---
@@ -173,6 +174,7 @@ type Trap struct {
 	IsTriggered  bool         `json:"is_triggered"`
 	IsDiscovered bool         `json:"is_discovered"`
 	IsDisarmed   bool         `json:"is_disarmed"`
+	IsOpened     bool         `json:"is_opened"`
 }
 
 // --- Dungeon & Rooms ---

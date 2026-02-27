@@ -66,7 +66,9 @@ type ItemView struct {
 type TrapView struct {
 	ID          string `json:"id"`
 	Description string `json:"description"`
+	Location    string `json:"location"`
 	IsDisarmed  bool   `json:"isDisarmed"`
+	IsOpened    bool   `json:"isOpened"`
 	Difficulty  int    `json:"difficulty"`
 }
 
@@ -155,9 +157,11 @@ func (gs *GameState) BuildSnapshot() *GameStateSnapshot {
 			snap.RoomItems = append(snap.RoomItems, buildItemView(item))
 		}
 
-		// Discovered traps in room
+		// Discovered traps + unopened chests in room
 		for _, trap := range gs.GetRoomTraps(currentRoom.ID) {
 			if trap.IsDiscovered {
+				snap.RoomTraps = append(snap.RoomTraps, buildTrapView(trap))
+			} else if trap.Location == TrapChest && !trap.IsOpened {
 				snap.RoomTraps = append(snap.RoomTraps, buildTrapView(trap))
 			}
 		}
@@ -298,7 +302,9 @@ func buildTrapView(t *Trap) *TrapView {
 	return &TrapView{
 		ID:          t.ID,
 		Description: t.Description,
+		Location:    string(t.Location),
 		IsDisarmed:  t.IsDisarmed,
+		IsOpened:    t.IsOpened,
 		Difficulty:  t.Difficulty,
 	}
 }

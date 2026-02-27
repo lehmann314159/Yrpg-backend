@@ -265,3 +265,59 @@ func TestIsRoomAdjacent(t *testing.T) {
 		t.Error("unknown room should not be adjacent")
 	}
 }
+
+func TestGetRoomItems_ExcludesChestItems(t *testing.T) {
+	gs := NewGameState("s1")
+
+	roomID := "r1"
+	chestID := "chest1"
+
+	// Normal floor item
+	gs.AddItem(&Item{ID: "i1", Name: "Sword", RoomID: &roomID})
+	// Item inside a chest (should be hidden)
+	gs.AddItem(&Item{ID: "i2", Name: "Hidden Gem", RoomID: &roomID, ChestTrapID: &chestID})
+
+	items := gs.GetRoomItems("r1")
+	if len(items) != 1 {
+		t.Fatalf("GetRoomItems count = %d, want 1 (chest item should be hidden)", len(items))
+	}
+	if items[0].ID != "i1" {
+		t.Errorf("visible item ID = %q, want i1", items[0].ID)
+	}
+}
+
+func TestRevealChestItems(t *testing.T) {
+	gs := NewGameState("s1")
+
+	roomID := "r1"
+	chestID := "chest1"
+	otherChest := "chest2"
+
+	gs.AddItem(&Item{ID: "i1", Name: "Gem", RoomID: &roomID, ChestTrapID: &chestID})
+	gs.AddItem(&Item{ID: "i2", Name: "Potion", RoomID: &roomID, ChestTrapID: &chestID})
+	gs.AddItem(&Item{ID: "i3", Name: "Other Gem", RoomID: &roomID, ChestTrapID: &otherChest})
+
+	revealed := gs.RevealChestItems("chest1")
+	if len(revealed) != 2 {
+		t.Fatalf("revealed count = %d, want 2", len(revealed))
+	}
+
+	// Revealed items should no longer have ChestTrapID
+	for _, item := range revealed {
+		if item.ChestTrapID != nil {
+			t.Errorf("revealed item %s still has ChestTrapID", item.ID)
+		}
+	}
+
+	// Item from other chest should still be hidden
+	otherItem := gs.Items["i3"]
+	if otherItem.ChestTrapID == nil {
+		t.Error("item from other chest should still have ChestTrapID")
+	}
+
+	// Now GetRoomItems should return the 2 revealed items + original floor items
+	visibleItems := gs.GetRoomItems("r1")
+	if len(visibleItems) != 2 {
+		t.Errorf("visible items after reveal = %d, want 2", len(visibleItems))
+	}
+}

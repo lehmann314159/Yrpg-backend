@@ -135,6 +135,9 @@ func (gs *GameState) BuildSnapshot() *GameStateSnapshot {
 		Victory:    gs.Victory,
 		TurnNumber: gs.TurnContext.TurnNumber,
 		LastEvent:  gs.TurnContext.LastEvent,
+		Monsters:   make([]*MonsterView, 0),
+		RoomItems:  make([]*ItemView, 0),
+		RoomTraps:  make([]*TrapView, 0),
 	}
 
 	// Party

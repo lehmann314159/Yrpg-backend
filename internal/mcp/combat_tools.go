@@ -215,10 +215,12 @@ func (s *Server) handleCombatUseItem(charID, itemID, targetID string) (*ToolResu
 
 	combatant.HasActed = true
 
-	// Sync HP changes to combatant
-	char := s.state.Party.GetCharacter(charID)
-	if char != nil {
-		combatant.HP = char.HP
+	// Sync HP changes from characters to their combatants (covers healing others, self-healing, etc.)
+	for _, pc := range s.state.Combat.GetPlayerCombatants() {
+		ch := s.state.Party.GetCharacter(pc.CharacterID)
+		if ch != nil {
+			pc.HP = ch.HP
+		}
 	}
 
 	// Advance turn
@@ -248,6 +250,7 @@ func (s *Server) handleCombatDefend(charID string) (*ToolResult, error) {
 	}
 
 	combatant.HasActed = true
+	combatant.AddBuff(game.BuffACBonus, game.DefendACBonus, 1, "Defend")
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("%s takes a defensive stance. (+%d AC this round)\n",
@@ -347,10 +350,9 @@ func (s *Server) handleCombatRetreat(charID string) (*ToolResult, error) {
 			// No engagement: automatic success
 			cs.RemoveFromGrid(combatant)
 			sb.WriteString(fmt.Sprintf("%s slips away unnoticed and returns to the party.\n", combatant.Name))
+			prevRoom := cs.PreviousRoomID
 			s.endCombat()
-			char.CurrentRoomID = cs.PreviousRoomID
-			s.state.Combat = nil
-			s.state.Mode = game.ModeExploration
+			char.CurrentRoomID = prevRoom
 			return s.textResult(sb.String()), nil
 		}
 
@@ -362,17 +364,17 @@ func (s *Server) handleCombatRetreat(charID string) (*ToolResult, error) {
 		// Sync HP from opportunity attack
 		if result.OpportunityAttack != nil {
 			char.HP = combatant.HP
-			if !combatant.IsAlive {
-				char.TakeDamage(char.HP + 1)
+			if !combatant.IsAlive && char.IsAlive {
+				char.HP = 0
+				char.IsAlive = false
 			}
 		}
 
 		if result.Success {
 			// Retreat succeeded: end combat, move thief back
+			prevRoom := cs.PreviousRoomID
 			s.endCombat()
-			char.CurrentRoomID = cs.PreviousRoomID
-			s.state.Combat = nil
-			s.state.Mode = game.ModeExploration
+			char.CurrentRoomID = prevRoom
 			sb.WriteString(fmt.Sprintf("%s retreats to the previous room.\n", char.Name))
 			return s.textResult(sb.String()), nil
 		}
@@ -454,12 +456,10 @@ func (s *Server) handleCombatRetreat(charID string) (*ToolResult, error) {
 		// Check if entire party has retreated
 		if game.CheckPartyRetreat(s.state.Combat, s.retreated) {
 			sb.WriteString("\nThe party retreats to the previous room!\n")
+			prevRoom := s.state.Combat.PreviousRoomID
 			s.endCombat()
 			// Move party back to previous room
-			s.state.Party.MoveAllToRoom(s.state.Combat.PreviousRoomID)
-			s.state.Combat = nil
-			s.state.Mode = game.ModeExploration
-			s.retreated = nil
+			s.state.Party.MoveAllToRoom(prevRoom)
 			return s.textResult(sb.String()), nil
 		}
 	}

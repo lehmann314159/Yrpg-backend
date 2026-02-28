@@ -344,8 +344,14 @@ func (cs *CombatState) GetCurrentCombatant() *Combatant {
 
 // AdvanceTurn moves to the next living combatant. Returns true if a new round starts.
 func (cs *CombatState) AdvanceTurn() bool {
+	if len(cs.Combatants) == 0 {
+		cs.IsActive = false
+		return false
+	}
+
 	newRound := false
-	for {
+	checked := 0
+	for checked < len(cs.Combatants) {
 		cs.CurrentTurnIdx++
 		if cs.CurrentTurnIdx >= len(cs.Combatants) {
 			// New round
@@ -364,13 +370,12 @@ func (cs *CombatState) AdvanceTurn() bool {
 		if current.IsAlive {
 			return newRound
 		}
-
-		// Safety: if we've looped through everyone and no one is alive, break
-		if cs.CurrentTurnIdx == 0 && newRound {
-			cs.IsActive = false
-			return newRound
-		}
+		checked++
 	}
+
+	// All combatants are dead
+	cs.IsActive = false
+	return newRound
 }
 
 // GetCombatant returns a combatant by ID

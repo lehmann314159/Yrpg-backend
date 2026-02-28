@@ -3,6 +3,7 @@ package game
 import (
 	"fmt"
 	"math/rand"
+	"time"
 )
 
 // Combat constants
@@ -469,8 +470,11 @@ func SyncCombatToCharacters(cs *CombatState, party *Party) {
 		char := party.GetCharacter(combatant.CharacterID)
 		if char != nil {
 			char.HP = combatant.HP
-			if !combatant.IsAlive {
-				char.TakeDamage(char.HP + 1) // ensure death is recorded with DiedAt
+			if !combatant.IsAlive && char.IsAlive {
+				char.HP = 0
+				char.IsAlive = false
+				now := time.Now()
+				char.DiedAt = &now
 			}
 		}
 	}

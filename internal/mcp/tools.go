@@ -532,6 +532,11 @@ func (s *Server) useConsumable(char *game.Character, item *game.Item) (*ToolResu
 
 // useScroll attempts to cast a scroll
 func (s *Server) useScroll(caster *game.Character, item *game.Item, targetID string) (*ToolResult, error) {
+	// Shield scrolls only work in combat
+	if item.ScrollEffect == "shield" && !s.state.InCombat() {
+		return s.textResult("The shield scroll can only be used in combat."), nil
+	}
+
 	// Roll: d20 + intelligence/2 vs scroll difficulty
 	roll := s.rng.Intn(20) + 1
 	bonus := caster.Intelligence / 2
@@ -615,7 +620,7 @@ func (s *Server) applyScrollEffect(caster *game.Character, item *game.Item, targ
 			}
 			return "Success! A shimmering barrier surrounds the party. (+4 AC for 3 rounds!)"
 		}
-		return "Success! A shimmering barrier surrounds the party. (Use in combat for +4 AC for 3 rounds)"
+		return "The shield scroll can only be used in combat." // unreachable; guarded in useScroll
 
 	case "fireball":
 		if s.state.InCombat() {

@@ -65,9 +65,8 @@ func (db *DB) LoadGameBySession(sessionID string) (*SavedGame, error) {
 // ListSaves returns all saved games, most recent first
 func (db *DB) ListSaves(limit int) ([]*SavedGame, error) {
 	rows, err := db.conn.Query(
-		`SELECT sg.id, sg.session_id, sg.saved_at, s.outcome
+		`SELECT sg.id, sg.session_id, sg.state_json, sg.saved_at
 		FROM saved_games sg
-		JOIN sessions s ON sg.session_id = s.id
 		ORDER BY sg.saved_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list saves: %w", err)
@@ -77,11 +76,13 @@ func (db *DB) ListSaves(limit int) ([]*SavedGame, error) {
 	saves := make([]*SavedGame, 0)
 	for rows.Next() {
 		sg := &SavedGame{}
-		var outcome *string
-		if err := rows.Scan(&sg.ID, &sg.SessionID, &sg.SavedAt, &outcome); err != nil {
+		if err := rows.Scan(&sg.ID, &sg.SessionID, &sg.StateJSON, &sg.SavedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan save: %w", err)
 		}
 		saves = append(saves, sg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate saves: %w", err)
 	}
 	return saves, nil
 }

@@ -119,7 +119,7 @@ func (db *DB) GetSessionEvents(sessionID string, limit int) ([]map[string]interf
 		}
 
 		var details interface{}
-		json.Unmarshal([]byte(detailsStr), &details)
+		_ = json.Unmarshal([]byte(detailsStr), &details) // best-effort; details may be empty string
 
 		events = append(events, map[string]interface{}{
 			"id":            id,
@@ -133,6 +133,9 @@ func (db *DB) GetSessionEvents(sessionID string, limit int) ([]map[string]interf
 			"details":       details,
 			"created_at":    createdAt,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate events: %w", err)
 	}
 	return events, nil
 }
@@ -158,6 +161,9 @@ func (db *DB) GetSessionCharacters(sessionID string) ([]*SessionCharacter, error
 		}
 		chars = append(chars, c)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate session characters: %w", err)
+	}
 	return chars, nil
 }
 
@@ -179,6 +185,9 @@ func (db *DB) CountEventsByType(sessionID string) (map[string]int, error) {
 			return nil, fmt.Errorf("failed to scan count: %w", err)
 		}
 		counts[eventType] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate event counts: %w", err)
 	}
 	return counts, nil
 }

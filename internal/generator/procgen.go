@@ -54,7 +54,9 @@ type DungeonGenerator struct {
 
 func generateID() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand.Read failed: " + err.Error())
+	}
 	return fmt.Sprintf("%x", b)
 }
 
@@ -539,7 +541,7 @@ func (dg *DungeonGenerator) pickItem(room *game.Room, difficulty int) *game.Item
 
 	roll := dg.random.Float64() * totalWeight
 	cumulative := 0.0
-	var selected ItemTemplate
+	selected := pool[len(pool)-1].template // fallback for floating-point edge case
 	for _, wt := range pool {
 		cumulative += wt.weight
 		if roll <= cumulative {

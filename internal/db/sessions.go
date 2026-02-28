@@ -107,5 +107,8 @@ func (db *DB) ListSessions(limit int) ([]*Session, error) {
 		}
 		sessions = append(sessions, s)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate sessions: %w", err)
+	}
 	return sessions, nil
 }

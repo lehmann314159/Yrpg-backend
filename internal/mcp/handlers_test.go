@@ -836,3 +836,256 @@ func TestHandleLook_MentionsChest(t *testing.T) {
 		t.Errorf("expected chest mention in look output, got: %s", text)
 	}
 }
+
+func TestHandleMove_DetectedTrapTriggersOnNonThief(t *testing.T) {
+	s := newTestServer()
+	// Party formation: Gandalf (mage), Conan (fighter), Bilbo (thief)
+	// FirstNonThief = Gandalf (mage, first non-thief in formation)
+
+	// Add a connected room
+	room2 := &game.Room{ID: "room2", Name: "Trap Room", X: 2, Y: 4}
+	s.state.AddRoom(room2)
+	s.state.AddConnection(&game.RoomConnection{
+		ID: "conn1", RoomID: "room1", Direction: "north", ConnectedRoomID: "room2",
+	})
+
+	// Add a room trap with very low difficulty so detection is guaranteed
+	trap := &game.Trap{
+		ID: "trap1", RoomID: "room2", Location: game.TrapRoom,
+		Description: "poison darts", Damage: 5, Difficulty: 1,
+	}
+	s.state.AddTrap(trap)
+
+	mage := getMage(s)
+	mageHPBefore := mage.HP
+
+	result, err := s.handleMove("north")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := result.Content[0].Text
+
+	// Should mention detection
+	if !strings.Contains(text, "notices something") {
+		t.Errorf("expected trap detection message, got: %s", text)
+	}
+
+	// Should trigger on the first non-thief (mage)
+	if !strings.Contains(text, "TRAP!") {
+		t.Errorf("expected trap trigger message, got: %s", text)
+	}
+
+	// Mage (first non-thief in formation) should have taken damage
+	if mage.HP >= mageHPBefore {
+		t.Errorf("mage HP should have decreased: before=%d, after=%d", mageHPBefore, mage.HP)
+	}
+
+	// Thief should be unharmed
+	thief := getThief(s)
+	if thief.HP != thief.MaxHP {
+		t.Errorf("thief should be unharmed: HP=%d, MaxHP=%d", thief.HP, thief.MaxHP)
+	}
+}
+
+func TestHandleSignalParty_UndisarmedTrapTriggersOnParty(t *testing.T) {
+	s := newTestServer()
+	s.rng = rand.New(rand.NewSource(99))
+	thief, dir := setupScoutableRoom(s)
+
+	// Add a room trap with very low difficulty — thief will detect it during scout
+	// (CheckTrapDetectionSolo will succeed, marking IsDiscovered=true but NOT triggering)
+	trap := &game.Trap{
+		ID: "trap1", RoomID: "room2", Location: game.TrapRoom,
+		Description: "pit trap", Damage: 4, Difficulty: 1,
+	}
+	s.state.AddTrap(trap)
+
+	// Scout ahead — thief detects the trap
+	_, err := s.handleScoutAhead(thief.ID, dir)
+	if err != nil {
+		t.Fatalf("scout error: %v", err)
+	}
+	if s.state.Combat == nil || !s.state.Combat.IsScoutPhase {
+		t.Skip("sneak failed with this seed, skipping")
+	}
+
+	// Verify the trap was detected but not triggered
+	if !trap.IsDiscovered {
+		t.Fatal("trap should be discovered by thief during scout")
+	}
+	if trap.IsTriggered {
+		t.Fatal("trap should not be triggered yet")
+	}
+
+	s.state.Combat.AwaitingScoutDecision = true
+
+	// Find first non-thief in formation
+	victim := s.state.Party.FirstNonThief()
+	if victim == nil {
+		t.Fatal("expected a non-thief party member")
+	}
+	victimHPBefore := victim.HP
+
+	result, err := s.handleSignalParty(thief.ID)
+	if err != nil {
+		t.Fatalf("signal error: %v", err)
+	}
+	text := result.Content[0].Text
+
+	if !strings.Contains(text, "signals the party") {
+		t.Errorf("expected signal message, got: %s", text)
+	}
+
+	// Trap should trigger on first non-thief
+	if !strings.Contains(text, "TRAP!") {
+		t.Errorf("expected trap trigger message, got: %s", text)
+	}
+
+	// Victim should have taken damage
+	if victim.HP >= victimHPBefore {
+		t.Errorf("victim HP should have decreased: before=%d, after=%d", victimHPBefore, victim.HP)
+	}
+
+	// Trap should be marked as triggered
+	if !trap.IsTriggered {
+		t.Error("trap should be marked as triggered")
+	}
+}
+
+func TestHandleDisarmTrap_AllowedDuringScoutPhase(t *testing.T) {
+	s := newTestServer()
+	thief := getThief(s)
+
+	// Set up scout combat with awaiting decision
+	s.state.Mode = game.ModeCombat
+	s.state.Combat = &game.CombatState{
+		IsActive:              true,
+		IsScoutPhase:          true,
+		AwaitingScoutDecision: true,
+		ScoutID:               thief.ID,
+		RoundNumber:           1,
+		CurrentTurnIdx:        0,
+		Engagements:           make(map[string]string),
+		Combatants: []*game.Combatant{
+			{ID: thief.ID, Name: thief.Name, IsPlayerChar: true, CharacterID: thief.ID, IsAlive: true, HP: 22, MaxHP: 22},
+		},
+	}
+
+	// Place a discovered trap in the thief's room
+	trap := &game.Trap{
+		ID: "trap1", RoomID: thief.CurrentRoomID, Location: game.TrapRoom,
+		Description: "spike trap", Damage: 5, Difficulty: 1,
+		IsDiscovered: true,
+	}
+	s.state.AddTrap(trap)
+
+	result, err := s.handleDisarmTrap(thief.ID, trap.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := result.Content[0].Text
+
+	// Should NOT be rejected with "in combat" message
+	if strings.Contains(text, "You are in combat") {
+		t.Errorf("disarm should be allowed during scout phase, got: %s", text)
+	}
+
+	// Non-scout should still be rejected
+	fighter := getFighter(s)
+	result2, err := s.handleDisarmTrap(fighter.ID, trap.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result2.Content[0].Text, "You are in combat") {
+		t.Errorf("non-scout should be rejected during combat, got: %s", result2.Content[0].Text)
+	}
+}
+
+// --- handleSetFormation ---
+
+func TestHandleSetFormation_Success(t *testing.T) {
+	s := newTestServer()
+	thief := getThief(s)
+	fighter := getFighter(s)
+	mage := getMage(s)
+
+	// Reorder: thief first, then fighter, then mage
+	newOrder := []string{thief.ID, fighter.ID, mage.ID}
+	result, err := s.handleSetFormation(newOrder)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result: %s", result.Content[0].Text)
+	}
+	text := result.Content[0].Text
+	if !strings.Contains(text, "Formation updated") {
+		t.Errorf("expected formation updated message, got: %s", text)
+	}
+
+	// Verify formation order
+	if len(s.state.Party.Formation) != 3 {
+		t.Fatalf("formation length = %d, want 3", len(s.state.Party.Formation))
+	}
+	if s.state.Party.Formation[0] != thief.ID {
+		t.Errorf("formation[0] = %s, want %s", s.state.Party.Formation[0], thief.ID)
+	}
+	if s.state.Party.Formation[1] != fighter.ID {
+		t.Errorf("formation[1] = %s, want %s", s.state.Party.Formation[1], fighter.ID)
+	}
+	if s.state.Party.Formation[2] != mage.ID {
+		t.Errorf("formation[2] = %s, want %s", s.state.Party.Formation[2], mage.ID)
+	}
+
+	// Verify point character changed
+	point := s.state.Party.PointCharacter()
+	if point.ID != thief.ID {
+		t.Errorf("PointCharacter = %s, want %s", point.ID, thief.ID)
+	}
+}
+
+func TestHandleSetFormation_RejectsInCombat(t *testing.T) {
+	s := newTestServer()
+	thief := getThief(s)
+	fighter := getFighter(s)
+	mage := getMage(s)
+
+	s.state.Mode = game.ModeCombat
+	s.state.Combat = &game.CombatState{IsActive: true, Engagements: make(map[string]string)}
+
+	result, err := s.handleSetFormation([]string{thief.ID, fighter.ID, mage.ID})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Content[0].Text, "in combat") {
+		t.Errorf("expected in-combat rejection, got: %s", result.Content[0].Text)
+	}
+}
+
+func TestHandleSetFormation_RejectsInvalidIDs(t *testing.T) {
+	s := newTestServer()
+	fighter := getFighter(s)
+	mage := getMage(s)
+
+	result, err := s.handleSetFormation([]string{"bogus_id", fighter.ID, mage.ID})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Content[0].Text, "Invalid formation") {
+		t.Errorf("expected invalid formation message, got: %s", result.Content[0].Text)
+	}
+}
+
+func TestHandleSetFormation_RejectsDuplicates(t *testing.T) {
+	s := newTestServer()
+	fighter := getFighter(s)
+	mage := getMage(s)
+
+	result, err := s.handleSetFormation([]string{fighter.ID, fighter.ID, mage.ID})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Content[0].Text, "Invalid formation") {
+		t.Errorf("expected invalid formation message, got: %s", result.Content[0].Text)
+	}
+}

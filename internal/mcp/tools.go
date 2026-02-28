@@ -274,6 +274,28 @@ func (s *Server) handleMove(direction string) (*ToolResult, error) {
 					s.logEvent("trap", "trap_detected", detection.DetectorID, detectorClass, trap.ID, map[string]interface{}{
 						"trap_type": trap.Description,
 					})
+
+					// Detected trap still triggers on first non-thief
+					victim := s.state.Party.FirstNonThief()
+					if victim != nil {
+						trigger := game.TriggerTrap(trap, victim, s.rng)
+						sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapTrigger(trigger)))
+						s.logEvent("trap", "trap_triggered", victim.ID, string(victim.Class), trap.ID, map[string]interface{}{
+							"trap_type": trap.Description,
+							"damage":    trigger.Damage,
+						})
+						if !victim.IsAlive {
+							s.logEvent("death", "character_killed", victim.ID, string(victim.Class), trap.ID, map[string]interface{}{
+								"cause": "trap",
+							})
+						}
+						if s.state.Party.IsWiped() {
+							s.state.GameOver = true
+							s.finalizeSession("party_wipe")
+							sb.WriteString("\nYour entire party has fallen. Game over.\nUse 'new_game' to play again.")
+							return s.textResult(sb.String()), nil
+						}
+					}
 				} else {
 					// Trap triggers on point character
 					point := s.state.Party.PointCharacter()
@@ -800,7 +822,13 @@ func (s *Server) handleOpenChest(charID string) (*ToolResult, error) {
 
 // handleDisarmTrap has a character attempt to disarm a discovered trap
 func (s *Server) handleDisarmTrap(charID, trapID string) (*ToolResult, error) {
-	if err := s.requireExploration(); err != nil {
+	// Allow during exploration OR during scout phase (thief only)
+	if s.state.InCombat() {
+		cs := s.state.Combat
+		if !cs.AwaitingScoutDecision || charID != cs.ScoutID {
+			return &ToolResult{Content: []ContentBlock{{Type: "text", Text: errInCombat}}}, nil
+		}
+	} else if err := s.requireExploration(); err != nil {
 		return err, nil
 	}
 
@@ -960,6 +988,22 @@ func (s *Server) handleSneak(charID, direction string) (*ToolResult, error) {
 		sb.WriteString("You couldn't get a clear look without being noticed. The room remains a mystery.")
 	}
 
+	return s.textResult(sb.String()), nil
+}
+
+// handleSetFormation reorders the party's marching order
+func (s *Server) handleSetFormation(formation []string) (*ToolResult, error) {
+	if err := s.requireExploration(); err != nil {
+		return err, nil
+	}
+
+	if err := s.state.Party.SetFormation(formation); err != nil {
+		return s.textResult(fmt.Sprintf("Invalid formation: %s", err.Error())), nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Formation updated!\n")
+	sb.WriteString(fmt.Sprintf("Marching order (front to back): %s\n", formatFormation(s.state.Party)))
 	return s.textResult(sb.String()), nil
 }
 

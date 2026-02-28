@@ -310,6 +310,21 @@ func (s *Server) ListTools() []Tool {
 			Description: "View the dungeon map showing explored areas",
 			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 		},
+		{
+			Name:        "set_formation",
+			Description: "Reorder the party's marching order (first = point, last = rear). Affects who triggers traps.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"formation": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Character IDs in desired marching order (front to back). Must include all party members.",
+					},
+				},
+				"required": []string{"formation"},
+			},
+		},
 
 		// Persistence Tools
 		{
@@ -537,6 +552,13 @@ func (s *Server) CallTool(name string, arguments map[string]interface{}) (*ToolR
 		return s.handleStats()
 	case "map":
 		return s.handleMap()
+	case "set_formation":
+		formationRaw, _ := arguments["formation"].([]interface{})
+		formation := make([]string, len(formationRaw))
+		for i, v := range formationRaw {
+			formation[i], _ = v.(string)
+		}
+		return s.handleSetFormation(formation)
 	case "save_game":
 		return s.handleSaveGame()
 	case "load_game":

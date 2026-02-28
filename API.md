@@ -265,6 +265,34 @@ Thief scouts an adjacent room without entering. Reveals enemies, traps, and item
 
 ---
 
+#### `set_formation`
+
+Reorder the party's marching order. The first character is the point (triggers traps first), and the last is the rear.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `formation` | array of strings | Yes | Character IDs in desired marching order (front to back). Must include all party members. |
+
+**Example:**
+```json
+{ "name": "set_formation", "arguments": { "formation": ["char_003", "char_001", "char_002"] } }
+```
+
+**Notes:**
+- Must include every party member exactly once
+- Affects who triggers traps (point character = first alive in formation)
+- `FirstNonThief()` also uses formation order (for detected-trap targeting)
+- Cannot be used during combat
+
+**Errors:**
+- Wrong number of IDs (must match party size)
+- Invalid character ID
+- Duplicate character ID
+- Currently in combat
+
+---
+
 #### `scout_ahead`
 
 Thief physically enters an adjacent room solo for a surprise round with double movement. If the sneak check succeeds, the thief enters combat alone with the enemies unaware. If it fails, the whole party rushes in for normal combat.

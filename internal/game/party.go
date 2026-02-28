@@ -91,6 +91,17 @@ func (p *Party) PointCharacter() *Character {
 	return nil
 }
 
+// FirstNonThief returns the first living non-thief character in formation order
+func (p *Party) FirstNonThief() *Character {
+	for _, id := range p.Formation {
+		c := p.GetCharacter(id)
+		if c != nil && c.IsAlive && c.Class != ClassThief {
+			return c
+		}
+	}
+	return nil
+}
+
 // HasClass returns true if the party has a living member of the given class
 func (p *Party) HasClass(class CharacterClass) bool {
 	for _, c := range p.Characters {

@@ -222,6 +222,41 @@ func TestSetFormation(t *testing.T) {
 	}
 }
 
+func TestFirstNonThief(t *testing.T) {
+	p := makeTestParty(t) // Fighter, Thief, Mage
+
+	// First non-thief should be Fighter (first in formation)
+	got := p.FirstNonThief()
+	if got == nil {
+		t.Fatal("expected a non-thief character")
+	}
+	if got.Class == ClassThief {
+		t.Errorf("expected non-thief, got class=%s", got.Class)
+	}
+	if got.Name != "Fighter" {
+		t.Errorf("expected Fighter (first in formation), got %s", got.Name)
+	}
+
+	// Kill the fighter — should return Mage
+	got.TakeDamage(999)
+	got2 := p.FirstNonThief()
+	if got2 == nil {
+		t.Fatal("expected Mage after fighter dies")
+	}
+	if got2.Name != "Mage" {
+		t.Errorf("expected Mage, got %s", got2.Name)
+	}
+
+	// All-thief party returns nil
+	allThieves, _ := NewParty([]PartyRequest{
+		{Name: "T1", Class: ClassThief},
+		{Name: "T2", Class: ClassThief},
+	})
+	if allThieves.FirstNonThief() != nil {
+		t.Error("expected nil for all-thief party")
+	}
+}
+
 func TestMoveAllToRoom(t *testing.T) {
 	p := makeTestParty(t)
 	p.Characters[1].TakeDamage(999) // kill one

@@ -1066,6 +1066,18 @@ func (s *Server) handleScoutAhead(charID, direction string) (*ToolResult, error)
 					detection := game.CheckTrapDetection(s.state.Party, trap, s.rng)
 					if detection.Detected {
 						sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapDetection(detection)))
+						// Detected trap still triggers on first non-thief
+						victim := s.state.Party.FirstNonThief()
+						if victim != nil {
+							trigger := game.TriggerTrap(trap, victim, s.rng)
+							sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapTrigger(trigger)))
+							if s.state.Party.IsWiped() {
+								s.state.GameOver = true
+								s.finalizeSession("party_wipe")
+								sb.WriteString("\nYour entire party has fallen. Game over.\nUse 'new_game' to play again.")
+								return s.textResult(sb.String()), nil
+							}
+						}
 					} else {
 						point := s.state.Party.PointCharacter()
 						if point != nil {
@@ -1112,12 +1124,35 @@ func (s *Server) handleSignalParty(charID string) (*ToolResult, error) {
 	// Move all party to scout's room
 	s.state.Party.MoveAllToRoom(scout.CurrentRoomID)
 
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%s signals the party! They rush into the room.\n\n", scout.Name))
+
+	// Discovered-but-not-disarmed room traps trigger on first non-thief
+	roomTraps := s.state.GetRoomTraps(scout.CurrentRoomID)
+	for _, trap := range roomTraps {
+		if trap.Location == game.TrapRoom && trap.IsDiscovered && !trap.IsTriggered && !trap.IsDisarmed {
+			victim := s.state.Party.FirstNonThief()
+			if victim != nil {
+				trigger := game.TriggerTrap(trap, victim, s.rng)
+				sb.WriteString(fmt.Sprintf("%s\n", game.FormatTrapTrigger(trigger)))
+				if !victim.IsAlive {
+					s.logEvent("death", "character_killed", victim.ID, string(victim.Class), trap.ID, map[string]interface{}{
+						"cause": "trap",
+					})
+				}
+				if s.state.Party.IsWiped() {
+					s.state.GameOver = true
+					s.finalizeSession("party_wipe")
+					sb.WriteString("\nYour entire party has fallen. Game over.\nUse 'new_game' to play again.")
+					return s.textResult(sb.String()), nil
+				}
+			}
+		}
+	}
+
 	// Add remaining party members to combat
 	monsters := s.state.GetRoomMonsters(scout.CurrentRoomID)
 	game.AddPartyToCombat(cs, s.state.Party, monsters, s.state.Items, s.rng)
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%s signals the party! They rush into the room.\n\n", scout.Name))
 
 	sb.WriteString("Initiative order:\n")
 	for _, c := range cs.Combatants {

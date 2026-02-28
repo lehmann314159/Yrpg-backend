@@ -5,3 +5,12 @@ yrpg-server
 *.db
 *.db-shm
 *.db-wal
+
+# IDE
+.idea/
+
+# Planning docs
+BACKEND-AC-TASK.md
+FORMATION_REORDER.md
+FRONTEND_PLAN.md
+SCOUT_AHEAD_SIGNAL_PARTY.md

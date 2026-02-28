@@ -1134,3 +1134,50 @@ func TestHandleMove_ReenterRoomWithSurvivingMonsters(t *testing.T) {
 		t.Errorf("expected move message, got: %s", result.Content[0].Text)
 	}
 }
+
+func TestHandleScoutAhead_DiscoversChestTrap(t *testing.T) {
+	s := newTestServer()
+	s.rng = rand.New(rand.NewSource(99))
+	thief, dir := setupScoutableRoom(s)
+
+	// Add a trapped chest in room2
+	s.state.AddTrap(&game.Trap{
+		ID:          "chest_trap1",
+		RoomID:      "room2",
+		Location:    game.TrapChest,
+		Description: "A suspicious-looking chest",
+		Damage:      8,
+		Difficulty:  10,
+	})
+
+	result, err := s.handleScoutAhead(thief.ID, dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := result.Content[0].Text
+
+	if !strings.Contains(text, "SURPRISE ROUND") {
+		t.Fatalf("expected successful sneak with seed 99, got: %s", text)
+	}
+
+	// The chest trap should now be discovered
+	roomTraps := s.state.GetRoomTraps("room2")
+	var chestTrap *game.Trap
+	for _, tr := range roomTraps {
+		if tr.ID == "chest_trap1" {
+			chestTrap = tr
+			break
+		}
+	}
+	if chestTrap == nil {
+		t.Fatal("chest trap not found in state")
+	}
+	if !chestTrap.IsDiscovered {
+		t.Error("expected chest trap IsDiscovered to be true after scout")
+	}
+
+	// Output should mention the trap description
+	if !strings.Contains(text, "A suspicious-looking chest") {
+		t.Errorf("expected trap detection message in output, got: %s", text)
+	}
+}

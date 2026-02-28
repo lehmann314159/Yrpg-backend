@@ -1032,6 +1032,15 @@ func (s *Server) handleScoutAhead(charID, direction string) (*ToolResult, error)
 					}
 				}
 			}
+			// Chest trap detection (passive only — chests don't trigger on entry)
+			for _, trap := range roomTraps {
+				if trap.Location == game.TrapChest && !trap.IsTriggered && !trap.IsDisarmed && trap.Damage > 0 {
+					detection := game.CheckTrapDetectionSolo(char, trap, s.rng)
+					if detection.Detected {
+						sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapDetection(detection)))
+					}
+				}
+			}
 		}
 
 		// Init scout combat
@@ -1090,6 +1099,15 @@ func (s *Server) handleScoutAhead(charID, direction string) (*ToolResult, error)
 								return s.textResult(sb.String()), nil
 							}
 						}
+					}
+				}
+			}
+			// Chest trap detection (passive only)
+			for _, trap := range roomTraps {
+				if trap.Location == game.TrapChest && !trap.IsTriggered && !trap.IsDisarmed && trap.Damage > 0 {
+					detection := game.CheckTrapDetection(s.state.Party, trap, s.rng)
+					if detection.Detected {
+						sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapDetection(detection)))
 					}
 				}
 			}

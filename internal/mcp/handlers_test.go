@@ -1089,3 +1089,48 @@ func TestHandleSetFormation_RejectsDuplicates(t *testing.T) {
 		t.Errorf("expected invalid formation message, got: %s", result.Content[0].Text)
 	}
 }
+
+// --- handleMove: re-enter room with surviving monsters ---
+
+func TestHandleMove_ReenterRoomWithSurvivingMonsters(t *testing.T) {
+	s := newTestServer()
+
+	// Create a second room connected north of room1
+	room2 := &game.Room{ID: "room2", Name: "Monster Room", X: 2, Y: 4}
+	s.state.AddRoom(room2)
+	s.state.AddConnection(&game.RoomConnection{ID: "c1", RoomID: "room1", Direction: "north", ConnectedRoomID: "room2"})
+	s.state.AddConnection(&game.RoomConnection{ID: "c2", RoomID: "room2", Direction: "south", ConnectedRoomID: "room1"})
+
+	// Mark room2 as already visited (simulates prior scout)
+	s.state.MarkRoomVisited("room2")
+
+	// Place a living monster in room2
+	s.state.AddMonster(&game.Monster{
+		ID:      "m1",
+		Name:    "Goblin",
+		HP:      10,
+		MaxHP:   10,
+		Damage:  2,
+		RoomID:  "room2",
+		IsAlive: true,
+	})
+
+	// Move party into room2
+	result, err := s.handleMove("north")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should have entered combat
+	if s.state.Mode != game.ModeCombat {
+		t.Errorf("expected ModeCombat, got %v", s.state.Mode)
+	}
+	if s.state.Combat == nil {
+		t.Error("expected Combat to be initialized, got nil")
+	}
+
+	// Result text should mention moving north
+	if !strings.Contains(result.Content[0].Text, "You move north") {
+		t.Errorf("expected move message, got: %s", result.Content[0].Text)
+	}
+}

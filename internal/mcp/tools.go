@@ -350,6 +350,15 @@ func (s *Server) handleMove(direction string) (*ToolResult, error) {
 		}
 	}
 
+	// Re-entering a room with surviving monsters (e.g. after scout retreat)
+	if !isFirstVisit {
+		monsters := s.state.GetRoomMonsters(newRoomID)
+		if len(monsters) > 0 {
+			combatMsg := s.enterCombat(previousRoomID, nil)
+			sb.WriteString(combatMsg)
+		}
+	}
+
 	return s.textResult(sb.String()), nil
 }
 

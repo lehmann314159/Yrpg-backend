@@ -158,7 +158,14 @@ func (gs *GameState) BuildSnapshot() *GameStateSnapshot {
 		}
 
 		// Discovered traps + unopened chests in room
-		for _, trap := range gs.GetRoomTraps(currentRoom.ID) {
+		// During scout combat, show traps from the scout's room
+		trapRoomID := currentRoom.ID
+		if gs.Combat != nil && gs.Combat.IsScoutPhase && gs.Combat.ScoutID != "" {
+			if scout := gs.Party.GetCharacter(gs.Combat.ScoutID); scout != nil {
+				trapRoomID = scout.CurrentRoomID
+			}
+		}
+		for _, trap := range gs.GetRoomTraps(trapRoomID) {
 			if trap.IsDiscovered {
 				snap.RoomTraps = append(snap.RoomTraps, buildTrapView(trap))
 			} else if trap.Location == TrapChest && !trap.IsOpened {

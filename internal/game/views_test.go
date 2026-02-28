@@ -723,6 +723,53 @@ func TestBuildSnapshot_UnopenedChestInTraps(t *testing.T) {
 	}
 }
 
+func TestBuildSnapshot_ScoutCombatTrapsFromScoutRoom(t *testing.T) {
+	gs := NewGameState("s1")
+	party, _ := NewParty([]PartyRequest{
+		{Name: "Conan", Class: ClassFighter},
+		{Name: "Shadow", Class: ClassThief},
+	})
+	gs.Party = party
+	gs.Dungeon = &Dungeon{ID: "d1", Depth: 1}
+
+	r1 := &Room{ID: "r1", Name: "Start Room", X: 0, Y: 0}
+	r2 := &Room{ID: "r2", Name: "Scout Room", X: 1, Y: 0}
+	gs.AddRoom(r1)
+	gs.AddRoom(r2)
+
+	// Party is in r1 (point character stays in r1)
+	party.MoveAllToRoom("r1")
+	// Thief moved alone to r2 for scouting
+	thief := party.GetCharacterByName("Shadow")
+	thief.CurrentRoomID = "r2"
+
+	// Discovered trap in r2 (scout's room) — should appear
+	gs.AddTrap(&Trap{ID: "t-r2", RoomID: "r2", Description: "Pit trap", IsDiscovered: true, Difficulty: 12})
+	// Undiscovered trap in r1 (party's room) — should NOT appear
+	gs.AddTrap(&Trap{ID: "t-r1", RoomID: "r1", Description: "Hidden trap", IsDiscovered: false, Difficulty: 10})
+
+	// Set up scout combat
+	cs := newTestCombatState()
+	cs.IsScoutPhase = true
+	cs.ScoutID = thief.ID
+	gs.Combat = cs
+	gs.Mode = ModeCombat
+
+	snap := gs.BuildSnapshot()
+
+	// CurrentRoom should still be r1 (party's point character room)
+	if snap.CurrentRoom.ID != "r1" {
+		t.Errorf("CurrentRoom.ID = %q, want r1", snap.CurrentRoom.ID)
+	}
+	// Should see the discovered trap from r2, not the undiscovered one from r1
+	if len(snap.RoomTraps) != 1 {
+		t.Fatalf("RoomTraps count = %d, want 1", len(snap.RoomTraps))
+	}
+	if snap.RoomTraps[0].ID != "t-r2" {
+		t.Errorf("trap ID = %q, want t-r2", snap.RoomTraps[0].ID)
+	}
+}
+
 func TestBuildTrapView_LocationAndIsOpened(t *testing.T) {
 	trap := &Trap{ID: "t1", Description: "Chest trap", Location: TrapChest, IsDisarmed: true, IsOpened: true, Difficulty: 12}
 	tv := buildTrapView(trap)

@@ -90,8 +90,8 @@ func CombatMove(cs *CombatState, combatant *Combatant, destX, destY int, movemen
 		return result
 	}
 
-	// Check movement range (Manhattan distance)
-	dist := ManhattanDistance(combatant.GridX, combatant.GridY, destX, destY)
+	// Check movement range (Chebyshev distance — diagonal moves cost 1)
+	dist := ChebyshevDistance(combatant.GridX, combatant.GridY, destX, destY)
 	if dist > movementRange {
 		result.Message = fmt.Sprintf("Too far! %s can move %d cells, destination is %d away.",
 			combatant.Name, movementRange, dist)

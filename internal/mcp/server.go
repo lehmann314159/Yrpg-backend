@@ -311,6 +311,31 @@ func (s *Server) ListTools() []Tool {
 			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 		},
 		{
+			Name:        "drop_item",
+			Description: "Drop an item from a character's inventory onto the current room floor",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"character_id": map[string]interface{}{"type": "string", "description": "ID of the character dropping the item"},
+					"item_id":      map[string]interface{}{"type": "string", "description": "ID of the item to drop"},
+				},
+				"required": []string{"character_id", "item_id"},
+			},
+		},
+		{
+			Name:        "give_item",
+			Description: "Transfer an item from one character to another party member",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"character_id":        map[string]interface{}{"type": "string", "description": "ID of the character giving the item"},
+					"item_id":             map[string]interface{}{"type": "string", "description": "ID of the item to give"},
+					"target_character_id": map[string]interface{}{"type": "string", "description": "ID of the character receiving the item"},
+				},
+				"required": []string{"character_id", "item_id", "target_character_id"},
+			},
+		},
+		{
 			Name:        "set_formation",
 			Description: "Reorder the party's marching order (first = point, last = rear). Affects who triggers traps.",
 			InputSchema: map[string]interface{}{
@@ -511,6 +536,21 @@ func (s *Server) CallTool(name string, arguments map[string]interface{}) (*ToolR
 			return nil, fmt.Errorf("character_id and item_id are required")
 		}
 		return s.handleTake(charID, itemID)
+	case "drop_item":
+		charID, _ := arguments["character_id"].(string)
+		itemID, _ := arguments["item_id"].(string)
+		if charID == "" || itemID == "" {
+			return nil, fmt.Errorf("character_id and item_id are required")
+		}
+		return s.handleDropItem(charID, itemID)
+	case "give_item":
+		charID, _ := arguments["character_id"].(string)
+		itemID, _ := arguments["item_id"].(string)
+		targetCharID, _ := arguments["target_character_id"].(string)
+		if charID == "" || itemID == "" || targetCharID == "" {
+			return nil, fmt.Errorf("character_id, item_id, and target_character_id are required")
+		}
+		return s.handleGiveItem(charID, itemID, targetCharID)
 	case "equip":
 		charID, _ := arguments["character_id"].(string)
 		itemID, _ := arguments["item_id"].(string)

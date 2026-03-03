@@ -231,22 +231,118 @@ func (s *Server) handleMove(direction string) (*ToolResult, error) {
 	previousRoomID := currentRoom.ID
 	s.state.ResetTurnContext()
 
-	// Move party
-	s.state.Party.MoveAllToRoom(newRoomID)
-	isFirstVisit := !s.state.IsRoomVisited(newRoomID)
-	s.state.MarkRoomVisited(newRoomID)
-
-	s.logEvent("movement", "room_enter", "", "", "", map[string]interface{}{
-		"direction":    direction,
-		"room_id":      newRoomID,
-		"first_visit":  isFirstVisit,
-	})
-
 	newRoom := s.state.Rooms[newRoomID]
+	isFirstVisit := !s.state.IsRoomVisited(newRoomID)
+
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("You move %s...\n\n", direction))
 	sb.WriteString(fmt.Sprintf("=== %s ===\n\n", newRoom.Name))
 	sb.WriteString(fmt.Sprintf("%s\n", newRoom.Description))
+
+	// On first visit with enemies, thief may scout ahead before the party enters
+	if isFirstVisit {
+		monsters := s.state.GetRoomMonsters(newRoomID)
+		thief := s.state.Party.GetByClass(game.ClassThief)
+		if len(monsters) > 0 && thief != nil && thief.IsAlive {
+			difficulty := generator.GetRoomDifficulty(newRoom)
+			sneakResult := game.CheckRoomSneak(thief, difficulty, s.rng)
+			sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatSneakResult(sneakResult)))
+			subtype := "sneak_fail"
+			if sneakResult.Success {
+				subtype = "sneak_success"
+				s.incrementStat(thief.ID, "successful_sneaks", 1)
+			}
+			s.logEvent("stealth", subtype, thief.ID, string(thief.Class), "", map[string]interface{}{
+				"roll":       sneakResult.Roll,
+				"dc":         sneakResult.DC,
+				"difficulty": difficulty,
+			})
+
+			if sneakResult.Success {
+				// Thief enters alone — scout combat
+				thief.CurrentRoomID = newRoomID
+				s.state.MarkRoomVisited(newRoomID)
+				s.logEvent("movement", "room_enter", thief.ID, string(thief.Class), "", map[string]interface{}{
+					"direction":   direction,
+					"room_id":     newRoomID,
+					"first_visit": true,
+					"scout_entry": true,
+				})
+
+				// Solo trap detection
+				roomTraps := s.state.GetRoomTraps(newRoomID)
+				for _, trap := range roomTraps {
+					if trap.Location == game.TrapRoom && !trap.IsTriggered && !trap.IsDisarmed {
+						detection := game.CheckTrapDetectionSolo(thief, trap, s.rng)
+						if detection.Detected {
+							sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapDetection(detection)))
+							s.logEvent("trap", "trap_detected", thief.ID, string(thief.Class), trap.ID, map[string]interface{}{
+								"trap_type": trap.Description,
+							})
+						} else {
+							trigger := game.TriggerTrap(trap, thief, s.rng)
+							sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapTrigger(trigger)))
+							s.logEvent("trap", "trap_triggered", thief.ID, string(thief.Class), trap.ID, map[string]interface{}{
+								"trap_type": trap.Description,
+								"damage":    trigger.Damage,
+							})
+							if !thief.IsAlive {
+								s.logEvent("death", "character_killed", thief.ID, string(thief.Class), trap.ID, map[string]interface{}{
+									"cause": "trap",
+								})
+								// Thief died to trap — rest of party charges in
+								sb.WriteString("\nThe party hears the trap and rushes in!\n")
+								s.state.Party.MoveAllToRoom(newRoomID)
+								combatMsg := s.enterCombat(previousRoomID, nil)
+								sb.WriteString(combatMsg)
+								return s.textResult(sb.String()), nil
+							}
+						}
+					}
+				}
+				// Chest trap detection (passive only)
+				for _, trap := range roomTraps {
+					if trap.Location == game.TrapChest && !trap.IsTriggered && !trap.IsDisarmed && trap.Damage > 0 {
+						detection := game.CheckTrapDetectionSolo(thief, trap, s.rng)
+						if detection.Detected {
+							sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapDetection(detection)))
+						}
+					}
+				}
+
+				// Init scout combat — only thief on the grid
+				cs := game.InitScoutCombat(thief, monsters, previousRoomID, s.state.Items, s.rng)
+				s.state.Combat = cs
+				s.state.Mode = game.ModeCombat
+				s.retreated = make(map[string]bool)
+
+				sb.WriteString(fmt.Sprintf("\n=== SURPRISE ROUND ===\n"))
+				sb.WriteString(fmt.Sprintf("%s enters alone! Enemies are unaware.\n\n", thief.Name))
+				sb.WriteString(fmt.Sprintf("Enemies (%d):\n", len(monsters)))
+				for _, m := range monsters {
+					sb.WriteString(fmt.Sprintf("  - %s (HP: %d/%d)\n", m.Name, m.HP, m.MaxHP))
+				}
+				sb.WriteString(fmt.Sprintf("\n%s has a surprise round with double movement (%d cells)!\n",
+					thief.Name, thief.GetMovementRange()*2))
+				sb.WriteString("Use combat_move and combat_attack, then choose signal_party or combat_retreat.\n")
+
+				return s.textResult(sb.String()), nil
+			}
+			// Sneak failed — fall through to normal party entry
+		}
+	}
+
+	// Normal path: move whole party
+	s.state.Party.MoveAllToRoom(newRoomID)
+	if isFirstVisit {
+		s.state.MarkRoomVisited(newRoomID)
+	}
+
+	s.logEvent("movement", "room_enter", "", "", "", map[string]interface{}{
+		"direction":   direction,
+		"room_id":     newRoomID,
+		"first_visit": isFirstVisit,
+	})
 
 	// Check for victory
 	if newRoom.IsExit {
@@ -322,30 +418,10 @@ func (s *Server) handleMove(direction string) (*ToolResult, error) {
 			}
 		}
 
-		// 2. Check for enemies
+		// 2. Check for enemies (sneak already failed or no thief — normal combat)
 		monsters := s.state.GetRoomMonsters(newRoomID)
 		if len(monsters) > 0 {
-			// 3. Sneak check (if party has a thief)
-			thief := s.state.Party.GetByClass(game.ClassThief)
-			sneakResult := (*game.SneakResult)(nil)
-			if thief != nil {
-				difficulty := generator.GetRoomDifficulty(newRoom)
-				sneakResult = game.CheckRoomSneak(thief, difficulty, s.rng)
-				sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatSneakResult(sneakResult)))
-				subtype := "sneak_fail"
-				if sneakResult.Success {
-					subtype = "sneak_success"
-					s.incrementStat(thief.ID, "successful_sneaks", 1)
-				}
-				s.logEvent("stealth", subtype, thief.ID, string(thief.Class), "", map[string]interface{}{
-					"roll":       sneakResult.Roll,
-					"dc":         sneakResult.DC,
-					"difficulty": difficulty,
-				})
-			}
-
-			// Transition to combat
-			combatMsg := s.enterCombat(previousRoomID, sneakResult)
+			combatMsg := s.enterCombat(previousRoomID, nil)
 			sb.WriteString(combatMsg)
 		}
 	}
@@ -404,6 +480,127 @@ func (s *Server) handleTake(charID, itemID string) (*ToolResult, error) {
 	item.CharacterID = &char.ID
 
 	return s.textResult(fmt.Sprintf("%s picks up the %s.", char.Name, item.Name)), nil
+}
+
+// handleDropItem drops an item from a character's inventory onto the room floor
+func (s *Server) handleDropItem(charID, itemID string) (*ToolResult, error) {
+	if err := s.requireExploration(); err != nil {
+		return err, nil
+	}
+
+	char, errResult := s.resolveCharacter(charID)
+	if errResult != nil {
+		return errResult, nil
+	}
+
+	item, ok := s.state.Items[itemID]
+	if !ok {
+		return s.textResult("Item not found. Use 'inventory' to see your items."), nil
+	}
+
+	// Check item belongs to this character
+	if item.CharacterID == nil || *item.CharacterID != char.ID {
+		return s.textResult("That item is not in this character's inventory."), nil
+	}
+
+	currentRoom := s.state.GetCurrentRoom()
+	if currentRoom == nil {
+		return s.errorResult("Error: current room not found."), nil
+	}
+
+	// Auto-unequip if equipped
+	var sb strings.Builder
+	if item.IsEquipped {
+		item.IsEquipped = false
+		switch item.Type {
+		case game.ItemWeapon:
+			if char.EquippedWeaponID != nil && *char.EquippedWeaponID == item.ID {
+				char.EquippedWeaponID = nil
+			}
+		case game.ItemArmor:
+			if char.EquippedArmorID != nil && *char.EquippedArmorID == item.ID {
+				char.EquippedArmorID = nil
+			}
+		}
+		sb.WriteString(fmt.Sprintf("%s unequips the %s.\n", char.Name, item.Name))
+	}
+
+	// Move item: remove from character index, add to room index
+	if s.state.ItemsByChar[char.ID] != nil {
+		delete(s.state.ItemsByChar[char.ID], itemID)
+	}
+	if s.state.ItemsByRoom[currentRoom.ID] == nil {
+		s.state.ItemsByRoom[currentRoom.ID] = make(map[string]bool)
+	}
+	s.state.ItemsByRoom[currentRoom.ID][itemID] = true
+
+	item.CharacterID = nil
+	item.RoomID = &currentRoom.ID
+
+	sb.WriteString(fmt.Sprintf("%s drops the %s.", char.Name, item.Name))
+	return s.textResult(sb.String()), nil
+}
+
+// handleGiveItem transfers an item from one character to another
+func (s *Server) handleGiveItem(charID, itemID, targetCharID string) (*ToolResult, error) {
+	if err := s.requireExploration(); err != nil {
+		return err, nil
+	}
+
+	char, errResult := s.resolveCharacter(charID)
+	if errResult != nil {
+		return errResult, nil
+	}
+
+	target, errResult := s.resolveCharacter(targetCharID)
+	if errResult != nil {
+		return errResult, nil
+	}
+
+	item, ok := s.state.Items[itemID]
+	if !ok {
+		return s.textResult("Item not found. Use 'inventory' to see your items."), nil
+	}
+
+	// Check item belongs to the giver
+	if item.CharacterID == nil || *item.CharacterID != char.ID {
+		return s.textResult("That item is not in this character's inventory."), nil
+	}
+
+	if char.ID == target.ID {
+		return s.textResult("Cannot give an item to the same character."), nil
+	}
+
+	// Auto-unequip if equipped
+	var sb strings.Builder
+	if item.IsEquipped {
+		item.IsEquipped = false
+		switch item.Type {
+		case game.ItemWeapon:
+			if char.EquippedWeaponID != nil && *char.EquippedWeaponID == item.ID {
+				char.EquippedWeaponID = nil
+			}
+		case game.ItemArmor:
+			if char.EquippedArmorID != nil && *char.EquippedArmorID == item.ID {
+				char.EquippedArmorID = nil
+			}
+		}
+		sb.WriteString(fmt.Sprintf("%s unequips the %s.\n", char.Name, item.Name))
+	}
+
+	// Transfer: remove from giver's index, add to target's index
+	if s.state.ItemsByChar[char.ID] != nil {
+		delete(s.state.ItemsByChar[char.ID], itemID)
+	}
+	if s.state.ItemsByChar[target.ID] == nil {
+		s.state.ItemsByChar[target.ID] = make(map[string]bool)
+	}
+	s.state.ItemsByChar[target.ID][itemID] = true
+
+	item.CharacterID = &target.ID
+
+	sb.WriteString(fmt.Sprintf("%s gives the %s to %s.", char.Name, item.Name, target.Name))
+	return s.textResult(sb.String()), nil
 }
 
 // handleEquip equips a weapon or armor for a character

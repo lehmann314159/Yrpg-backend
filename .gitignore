@@ -9,6 +9,9 @@ yrpg-server
 # IDE
 .idea/
 
+# Test harness logs
+test_harness/logs/
+
 # Planning docs
 BACKEND-AC-TASK.md
 FORMATION_REORDER.md

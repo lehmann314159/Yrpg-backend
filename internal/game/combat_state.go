@@ -443,6 +443,9 @@ func (cs *CombatState) RemoveFromGrid(c *Combatant) {
 
 // PlaceOnGrid places a combatant on the grid
 func (cs *CombatState) PlaceOnGrid(c *Combatant, x, y int) {
+	if x < 0 || x >= GridWidth || y < 0 || y >= GridHeight {
+		return
+	}
 	cs.RemoveFromGrid(c)
 	c.GridX = x
 	c.GridY = y

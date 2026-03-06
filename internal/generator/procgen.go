@@ -32,11 +32,12 @@ const (
 	SecondItemChance  = 0.15
 
 	// Trap spawn constants
-	BaseTrapChance    = 0.15
-	TrapChancePerDiff = 0.05
-	MaxTrapChance     = 0.40
-	ChestSpawnChance  = 0.20
-	ChestTrapChance   = 0.50
+	BaseTrapChance             = 0.15
+	TrapChancePerDiff          = 0.05
+	MaxTrapChance              = 0.40
+	TrapDifficultyScaleFactor  = 0.10
+	ChestSpawnChance           = 0.20
+	ChestTrapChance            = 0.50
 
 	// Chest loot constants
 	ChestSecondItemChance = 0.35
@@ -650,7 +651,7 @@ func (dg *DungeonGenerator) pickTrap(room *game.Room, difficulty int, templates 
 	}
 
 	template := eligible[dg.random.Intn(len(eligible))]
-	scaleFactor := 1.0 + float64(difficulty)*0.10
+	scaleFactor := 1.0 + float64(difficulty)*TrapDifficultyScaleFactor
 
 	return &game.Trap{
 		ID:          generateID(),

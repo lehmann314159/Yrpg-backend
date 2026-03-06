@@ -407,14 +407,6 @@ func RemoveEngagement(cs *CombatState, combatantID string) {
 	delete(cs.Engagements, combatantID)
 }
 
-// --- Defend ---
-
-// CombatDefend puts a combatant in full defense mode for the round.
-// The defense bonus is applied when calculating defense in attacks.
-// We track this via a simple convention: HasActed = true and we check for it.
-// For a cleaner implementation, we'd add a DefendingThisRound field.
-// For now, callers should check and apply DefendACBonus.
-
 // --- Retreat ---
 
 // AttemptRetreat has a combatant attempt to flee combat.

@@ -470,8 +470,9 @@ func (s *Server) handleCombatRetreat(charID string) (*ToolResult, error) {
 	// Sync HP changes from opportunity attacks
 	if result.OpportunityAttack != nil {
 		char.HP = combatant.HP
-		if !combatant.IsAlive {
-			char.TakeDamage(char.HP + 1)
+		if !combatant.IsAlive && char.IsAlive {
+			char.HP = 0
+			char.IsAlive = false
 		}
 	}
 
@@ -574,8 +575,13 @@ func (s *Server) handleCombatCastSpell(charID, spellID, targetID string) (*ToolR
 		char.Name, spell.Name, char.SpellSlots, char.MaxSpellSlots))
 	sb.WriteString(s.applyScrollEffect(char, syntheticItem, targetID))
 
-	// Sync HP changes from heals to combatant
-	combatant.HP = char.HP
+	// Sync HP changes from heals to all player combatants (covers healing others)
+	for _, pc := range s.state.Combat.GetPlayerCombatants() {
+		ch := s.state.Party.GetCharacter(pc.CharacterID)
+		if ch != nil {
+			pc.HP = ch.HP
+		}
+	}
 
 	s.logEvent("spell", "combat_spell_cast", charID, string(char.Class), targetID, map[string]interface{}{
 		"spell": spellID, "slots_remaining": char.SpellSlots,

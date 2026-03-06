@@ -12,12 +12,12 @@ func TestNewCharacter_MagicUser(t *testing.T) {
 		t.Errorf("Intelligence = %d, want 16", c.Intelligence)
 	}
 
-	// CalcMaxSlots(16) = 3
-	if c.MaxSpellSlots != 3 {
-		t.Errorf("MaxSpellSlots = %d, want 3", c.MaxSpellSlots)
+	// CalcMaxSlots(16) = 4
+	if c.MaxSpellSlots != 4 {
+		t.Errorf("MaxSpellSlots = %d, want 4", c.MaxSpellSlots)
 	}
-	if c.SpellSlots != 3 {
-		t.Errorf("SpellSlots = %d, want 3", c.SpellSlots)
+	if c.SpellSlots != 4 {
+		t.Errorf("SpellSlots = %d, want 4", c.SpellSlots)
 	}
 
 	if len(c.KnownSpells) != 2 {
@@ -149,8 +149,8 @@ func TestGetMovementRange(t *testing.T) {
 	thief, _ := NewCharacter("T", ClassThief)
 	mage, _ := NewCharacter("M", ClassMagicUser)
 
-	if fighter.GetMovementRange() != 2 {
-		t.Errorf("fighter movement = %d, want 2", fighter.GetMovementRange())
+	if fighter.GetMovementRange() != 3 {
+		t.Errorf("fighter movement = %d, want 3", fighter.GetMovementRange())
 	}
 	if thief.GetMovementRange() != 4 {
 		t.Errorf("thief movement = %d, want 4", thief.GetMovementRange())

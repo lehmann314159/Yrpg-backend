@@ -21,9 +21,9 @@ var SpellRegistry = map[string]*SpellDefinition{
 	"resurrect": {ID: "resurrect", Name: "Resurrect", ManaCost: 1, CombatOnly: false},
 }
 
-// CalcMaxSlots derives max spell slots from intelligence: intelligence / 5
+// CalcMaxSlots derives max spell slots from intelligence: intelligence / 4
 func CalcMaxSlots(intelligence int) int {
-	return intelligence / 5
+	return intelligence / 4
 }
 
 // CanCast checks whether a character can cast a specific spell.

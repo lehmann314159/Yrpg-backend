@@ -65,8 +65,8 @@ func TestHandleCastSpell_HealSelf(t *testing.T) {
 	if !strings.Contains(result.Content[0].Text, "casts Heal") {
 		t.Errorf("expected cast message, got: %s", result.Content[0].Text)
 	}
-	if mage.SpellSlots != 2 {
-		t.Errorf("SpellSlots = %d, want 2 (3 - 1)", mage.SpellSlots)
+	if mage.SpellSlots != 3 {
+		t.Errorf("SpellSlots = %d, want 3 (4 - 1)", mage.SpellSlots)
 	}
 	if mage.HP <= 10 {
 		t.Errorf("mage HP should have increased from 10, got %d", mage.HP)
@@ -136,9 +136,9 @@ func TestHandleCombatCastSpell_SuccessDuringCombat(t *testing.T) {
 	s := newTestServer()
 	mage := getMage(s)
 
-	// Set up combat state with mage as current combatant
+	// Set up combat state with mage as current combatant and an enemy so combat doesn't end
 	s.state.Mode = game.ModeCombat
-	s.state.Combat = &game.CombatState{
+	cs := &game.CombatState{
 		IsActive:    true,
 		RoundNumber: 1,
 		Combatants: []*game.Combatant{
@@ -151,9 +151,30 @@ func TestHandleCombatCastSpell_SuccessDuringCombat(t *testing.T) {
 				MaxHP:        mage.MaxHP,
 				IsAlive:      true,
 			},
+			{
+				ID:           "enemy_1",
+				Name:         "Goblin",
+				IsPlayerChar: false,
+				CharacterID:  "enemy_1",
+				HP:           10,
+				MaxHP:        10,
+				IsAlive:      true,
+				GridX:        4,
+				GridY:        4,
+			},
 		},
 		CurrentTurnIdx: 0,
 		Engagements:    make(map[string]string),
+	}
+	for y := 0; y < game.GridHeight; y++ {
+		for x := 0; x < game.GridWidth; x++ {
+			cs.Grid[y][x] = &game.GridCell{X: x, Y: y}
+		}
+	}
+	cs.PlaceOnGrid(cs.Combatants[1], 4, 4)
+	s.state.Combat = cs
+	s.state.Monsters["enemy_1"] = &game.Monster{
+		ID: "enemy_1", Name: "Goblin", HP: 10, MaxHP: 10, Damage: 3, Dexterity: 10, IsAlive: true,
 	}
 
 	mage.HP = 10 // damage the mage
@@ -167,8 +188,8 @@ func TestHandleCombatCastSpell_SuccessDuringCombat(t *testing.T) {
 	if !strings.Contains(text, "casts Heal") {
 		t.Errorf("expected cast message, got: %s", text)
 	}
-	if mage.SpellSlots != 2 {
-		t.Errorf("SpellSlots = %d, want 2", mage.SpellSlots)
+	if mage.SpellSlots != 3 {
+		t.Errorf("SpellSlots = %d, want 3", mage.SpellSlots)
 	}
 }
 
@@ -1179,5 +1200,98 @@ func TestHandleScoutAhead_DiscoversChestTrap(t *testing.T) {
 	// Output should mention the trap description
 	if !strings.Contains(text, "A suspicious-looking chest") {
 		t.Errorf("expected trap detection message in output, got: %s", text)
+	}
+}
+
+// --- HP Progression ---
+
+func TestCombatVictory_HPProgression(t *testing.T) {
+	s := newTestServer()
+	mage := getMage(s)
+	fighter := getFighter(s)
+	thief := getThief(s)
+
+	// Record starting MaxHP/HP for each character
+	mageMaxHP := mage.MaxHP
+	mageHP := mage.HP
+	fighterMaxHP := fighter.MaxHP
+	fighterHP := fighter.HP
+	thiefMaxHP := thief.MaxHP
+	thiefHP := thief.HP
+
+	// Set up combat with a single dead enemy so checkCombatEnd triggers victory
+	s.state.Mode = game.ModeCombat
+	cs := &game.CombatState{
+		IsActive:    true,
+		RoundNumber: 1,
+		Combatants: []*game.Combatant{
+			{
+				ID: fighter.ID, Name: fighter.Name, IsPlayerChar: true,
+				CharacterID: fighter.ID, HP: fighter.HP, MaxHP: fighter.MaxHP, IsAlive: true,
+			},
+			{
+				ID: mage.ID, Name: mage.Name, IsPlayerChar: true,
+				CharacterID: mage.ID, HP: mage.HP, MaxHP: mage.MaxHP, IsAlive: true,
+			},
+			{
+				ID: thief.ID, Name: thief.Name, IsPlayerChar: true,
+				CharacterID: thief.ID, HP: thief.HP, MaxHP: thief.MaxHP, IsAlive: true,
+			},
+			{
+				ID: "enemy_1", Name: "Goblin", IsPlayerChar: false,
+				CharacterID: "enemy_1", HP: 0, MaxHP: 5, IsAlive: false,
+			},
+		},
+		CurrentTurnIdx: 0,
+		Engagements:    make(map[string]string),
+	}
+	for y := 0; y < game.GridHeight; y++ {
+		for x := 0; x < game.GridWidth; x++ {
+			cs.Grid[y][x] = &game.GridCell{X: x, Y: y}
+		}
+	}
+	s.state.Combat = cs
+	s.state.Monsters["enemy_1"] = &game.Monster{
+		ID: "enemy_1", Name: "Goblin", HP: 0, MaxHP: 5, Damage: 2, Dexterity: 10, IsAlive: false,
+	}
+
+	// Trigger combat end check
+	var sb strings.Builder
+	msg := s.checkCombatEnd(&sb)
+	text := sb.String()
+
+	// Combat should have ended with victory
+	if msg == "" {
+		t.Fatal("expected combat end message, got empty string")
+	}
+
+	// Each alive character should have +2 MaxHP and +2 HP
+	if fighter.MaxHP != fighterMaxHP+2 {
+		t.Errorf("fighter MaxHP = %d, want %d", fighter.MaxHP, fighterMaxHP+2)
+	}
+	if fighter.HP != fighterHP+2 {
+		t.Errorf("fighter HP = %d, want %d", fighter.HP, fighterHP+2)
+	}
+	if mage.MaxHP != mageMaxHP+2 {
+		t.Errorf("mage MaxHP = %d, want %d", mage.MaxHP, mageMaxHP+2)
+	}
+	if mage.HP != mageHP+2 {
+		t.Errorf("mage HP = %d, want %d", mage.HP, mageHP+2)
+	}
+	if thief.MaxHP != thiefMaxHP+2 {
+		t.Errorf("thief MaxHP = %d, want %d", thief.MaxHP, thiefMaxHP+2)
+	}
+	if thief.HP != thiefHP+2 {
+		t.Errorf("thief HP = %d, want %d", thief.HP, thiefHP+2)
+	}
+
+	// Output should mention the HP increase for each character
+	if !strings.Contains(text, "grows stronger") {
+		t.Errorf("expected 'grows stronger' message, got: %s", text)
+	}
+
+	// Should be back in exploration mode
+	if s.state.Mode != game.ModeExploration {
+		t.Errorf("mode = %s, want exploration", s.state.Mode)
 	}
 }

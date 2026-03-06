@@ -42,11 +42,11 @@ func TestBuildSnapshot_MagicUserSpellFields(t *testing.T) {
 	}
 
 	// Magic user should have spell fields populated
-	if mageView.MaxSpellSlots != 3 {
-		t.Errorf("mage MaxSpellSlots = %d, want 3", mageView.MaxSpellSlots)
+	if mageView.MaxSpellSlots != 4 {
+		t.Errorf("mage MaxSpellSlots = %d, want 4", mageView.MaxSpellSlots)
 	}
-	if mageView.SpellSlots != 3 {
-		t.Errorf("mage SpellSlots = %d, want 3", mageView.SpellSlots)
+	if mageView.SpellSlots != 4 {
+		t.Errorf("mage SpellSlots = %d, want 4", mageView.SpellSlots)
 	}
 	if len(mageView.KnownSpells) != 2 {
 		t.Errorf("mage KnownSpells length = %d, want 2", len(mageView.KnownSpells))
@@ -337,9 +337,9 @@ func TestBuildCombatView_MovementAndAttackRange(t *testing.T) {
 		views[v.Name] = v
 	}
 
-	// Fighter: movementRange=2, attackRange=1 (melee weapon)
-	if views["Tank"].MovementRange != 2 {
-		t.Errorf("Fighter movementRange = %d, want 2", views["Tank"].MovementRange)
+	// Fighter: movementRange=3, attackRange=1 (melee weapon)
+	if views["Tank"].MovementRange != 3 {
+		t.Errorf("Fighter movementRange = %d, want 3", views["Tank"].MovementRange)
 	}
 	if views["Tank"].AttackRange != 1 {
 		t.Errorf("Fighter attackRange = %d, want 1", views["Tank"].AttackRange)
@@ -506,8 +506,8 @@ func TestBuildCombatView_NonScoutNoDoubleMovement(t *testing.T) {
 	if views["Shadow"].MovementRange != 4 {
 		t.Errorf("thief movementRange = %d, want 4 (no doubling)", views["Shadow"].MovementRange)
 	}
-	if views["Conan"].MovementRange != 2 {
-		t.Errorf("fighter movementRange = %d, want 2", views["Conan"].MovementRange)
+	if views["Conan"].MovementRange != 3 {
+		t.Errorf("fighter movementRange = %d, want 3", views["Conan"].MovementRange)
 	}
 }
 

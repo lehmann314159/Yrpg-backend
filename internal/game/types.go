@@ -113,6 +113,8 @@ type Combatant struct {
 	ArmorBonus   int     `json:"armor_bonus"`
 	EngagedWith  *string `json:"engaged_with,omitempty"`
 	Buffs        []Buff  `json:"buffs,omitempty"`
+	ProtectedBy  string  `json:"protected_by,omitempty"`
+	HasCharged   bool    `json:"has_charged"`
 }
 
 // --- Items ---

@@ -358,10 +358,11 @@ func (cs *CombatState) AdvanceTurn() bool {
 			cs.CurrentTurnIdx = 0
 			cs.RoundNumber++
 			newRound = true
-			// Reset per-turn flags and tick buffs
+			// Reset per-turn flags, clear protection, and tick buffs
 			for _, c := range cs.Combatants {
 				c.HasMoved = false
 				c.HasActed = false
+				c.ProtectedBy = ""
 				c.TickBuffs()
 			}
 		}

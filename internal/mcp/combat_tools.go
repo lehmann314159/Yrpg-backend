@@ -177,6 +177,34 @@ func (s *Server) handleCombatAttack(charID, targetID string) (*ToolResult, error
 		s.incrementStat(charID, "kills", 1)
 	}
 
+	// Cleave: when a fighter kills an enemy with melee, free attack on adjacent enemy
+	if result.TargetDied && char.Class == game.ClassFighter &&
+		(weapon == nil || weapon.Range != game.RangeRanged) {
+		// Find an alive enemy adjacent to the killed target's last position
+		var cleaveTarget *game.Combatant
+		for _, c := range s.state.Combat.GetEnemyCombatants() {
+			if c.IsAlive && game.IsAdjacent(target.GridX, target.GridY, c.GridX, c.GridY) {
+				cleaveTarget = c
+				break
+			}
+		}
+		if cleaveTarget != nil {
+			cleaveResult := game.CombatAttack(s.state.Combat, combatant, cleaveTarget, char, weapon, s.rng)
+			sb.WriteString("\nCleave! " + game.FormatAttackResult(cleaveResult))
+			s.logEvent("combat", "cleave", charID, string(char.Class), cleaveTarget.ID, map[string]interface{}{
+				"roll":   cleaveResult.Roll,
+				"damage": cleaveResult.Damage,
+			})
+			if cleaveResult.Hit {
+				s.incrementStat(charID, "damage_dealt", cleaveResult.Damage)
+			}
+			if cleaveResult.TargetDied {
+				s.logEvent("death", "enemy_defeated", charID, string(char.Class), cleaveTarget.ID, nil)
+				s.incrementStat(charID, "kills", 1)
+			}
+		}
+	}
+
 	// Check combat end
 	msg := s.checkCombatEnd(&sb)
 	if msg != "" {
@@ -566,6 +594,126 @@ func (s *Server) handleCombatCastSpell(charID, spellID, targetID string) (*ToolR
 	return s.textResult(sb.String()), nil
 }
 
+// handleCombatCantrip fires a free ranged arcane bolt (no spell slot cost)
+func (s *Server) handleCombatCantrip(charID, targetID string) (*ToolResult, error) {
+	if err := s.requireCombat(); err != nil {
+		return err, nil
+	}
+	if s.state.Combat.AwaitingScoutDecision {
+		return s.textResult(errAwaitingScoutDecision), nil
+	}
+
+	combatant, errResult := s.requirePlayerTurn(charID)
+	if errResult != nil {
+		return errResult, nil
+	}
+
+	if combatant.HasActed {
+		return s.textResult(fmt.Sprintf("%s has already acted this turn.", combatant.Name)), nil
+	}
+
+	char, errResult := s.resolveCharacter(charID)
+	if errResult != nil {
+		return errResult, nil
+	}
+
+	if char.Class != game.ClassMagicUser {
+		return s.textResult("Only a magic_user can use cantrip."), nil
+	}
+
+	target := s.state.Combat.GetCombatant(targetID)
+	if target == nil || !target.IsAlive {
+		return s.textResult("Target not found or already dead."), nil
+	}
+	if target.IsPlayerChar {
+		return s.textResult("Cannot target your own party member."), nil
+	}
+
+	// Range check: Chebyshev distance <= 3
+	dist := game.ChebyshevDistance(combatant.GridX, combatant.GridY, target.GridX, target.GridY)
+	if dist > 3 {
+		return s.textResult(fmt.Sprintf("Target is out of range! (Distance: %d, max range: 3)", dist)), nil
+	}
+
+	combatant.HasActed = true
+
+	intMod := char.Intelligence / 2
+	roll := s.rng.Intn(20) + 1 // d20
+	total := roll + intMod
+
+	// Target AC: base defense + any AC buffs
+	targetAC := game.BaseDefense + target.GetACBonus()
+
+	var sb strings.Builder
+	isCrit := roll == 20
+	hit := total >= targetAC || isCrit
+
+	if hit {
+		// Damage: 1d4 + INT/2, crit doubles dice to 2d4
+		numDice := 1
+		if isCrit {
+			numDice = 2
+		}
+		damage := 0
+		for i := 0; i < numDice; i++ {
+			damage += s.rng.Intn(4) + 1
+		}
+		damage += intMod
+		if damage < 1 {
+			damage = 1
+		}
+
+		target.HP -= damage
+		targetDied := false
+		if target.HP <= 0 {
+			target.HP = 0
+			target.IsAlive = false
+			targetDied = true
+			s.state.Combat.RemoveFromGrid(target)
+			game.RemoveEngagement(s.state.Combat, target.ID)
+		}
+
+		if isCrit {
+			sb.WriteString(fmt.Sprintf("CRITICAL! %s blasts %s with an arcane bolt! ", combatant.Name, target.Name))
+		} else {
+			sb.WriteString(fmt.Sprintf("%s hits %s with an arcane bolt! ", combatant.Name, target.Name))
+		}
+		sb.WriteString(fmt.Sprintf("(d20:%d +%d = %d vs AC %d) %d damage. (%s HP: %d/%d)\n",
+			roll, intMod, total, targetAC, damage, target.Name, target.HP, target.MaxHP))
+
+		subtype := "cantrip_hit"
+		if isCrit {
+			subtype = "cantrip_crit"
+		}
+		s.logEvent("combat", subtype, charID, string(char.Class), targetID, map[string]interface{}{
+			"roll": roll, "damage": damage, "was_critical": isCrit,
+		})
+		s.incrementStat(charID, "damage_dealt", damage)
+
+		if targetDied {
+			sb.WriteString(fmt.Sprintf("%s is destroyed!\n", target.Name))
+			s.logEvent("death", "enemy_defeated", charID, string(char.Class), targetID, nil)
+			s.incrementStat(charID, "kills", 1)
+		}
+	} else {
+		sb.WriteString(fmt.Sprintf("%s's arcane bolt misses %s. (d20:%d +%d = %d vs AC %d)\n",
+			combatant.Name, target.Name, roll, intMod, total, targetAC))
+		s.logEvent("combat", "cantrip_miss", charID, string(char.Class), targetID, map[string]interface{}{
+			"roll": roll,
+		})
+	}
+
+	// Check combat end
+	msg := s.checkCombatEnd(&sb)
+	if msg != "" {
+		return s.textResult(sb.String()), nil
+	}
+
+	sb.WriteString(s.advanceTurnAndRunMonsters())
+
+	return s.textResult(sb.String()), nil
+}
+
 // --- Ambush Combat ---
 
 // generateAmbushMonsters creates 1-3 monsters scaled to room depth for an ambush
@@ -886,8 +1034,24 @@ func (s *Server) checkCombatEnd(sb *strings.Builder) string {
 				s.state.Party.MoveAllToRoom(scout.CurrentRoomID)
 			}
 		}
+		// Recover 1 spell slot for alive mages on combat victory
+		for _, ch := range s.state.Party.Characters {
+			if ch.IsAlive && ch.Class == game.ClassMagicUser && ch.SpellSlots < ch.MaxSpellSlots {
+				ch.SpellSlots++
+				sb.WriteString(fmt.Sprintf("%s recovers a spell slot from the victory. (%d/%d)\n", ch.Name, ch.SpellSlots, ch.MaxSpellSlots))
+			}
+		}
 		s.logEvent("combat", "combat_victory", "", "", "", nil)
 		s.endCombat()
+		// HP progression: all alive characters gain +2 max HP on combat victory
+		for _, ch := range s.state.Party.Characters {
+			if ch.IsAlive {
+				ch.MaxHP += 2
+				ch.HP += 2
+				sb.WriteString(fmt.Sprintf("%s grows stronger! MaxHP increased to %d. (HP: %d/%d)\n",
+					ch.Name, ch.MaxHP, ch.HP, ch.MaxHP))
+			}
+		}
 		sb.WriteString("You may now explore or move on.\n")
 	}
 
@@ -1192,6 +1356,199 @@ func (s *Server) handleSignalParty(charID string) (*ToolResult, error) {
 	} else if current != nil {
 		sb.WriteString(fmt.Sprintf("\n%s's turn! Use combat tools.\n", current.Name))
 	}
+
+	return s.textResult(sb.String()), nil
+}
+
+// handleCombatCharge has a fighter charge toward an enemy with double movement and bonus damage
+func (s *Server) handleCombatCharge(charID, targetID string) (*ToolResult, error) {
+	if err := s.requireCombat(); err != nil {
+		return err, nil
+	}
+	if s.state.Combat.AwaitingScoutDecision {
+		return s.textResult(errAwaitingScoutDecision), nil
+	}
+
+	combatant, errResult := s.requirePlayerTurn(charID)
+	if errResult != nil {
+		return errResult, nil
+	}
+
+	if combatant.HasMoved || combatant.HasActed {
+		return s.textResult("Charge requires a fresh turn — cannot have moved or acted yet."), nil
+	}
+
+	if combatant.HasCharged {
+		return s.textResult("Charge can only be used once per combat."), nil
+	}
+
+	char, errResult := s.resolveCharacter(charID)
+	if errResult != nil {
+		return errResult, nil
+	}
+
+	if char.Class != game.ClassFighter {
+		return s.textResult("Only a fighter can charge."), nil
+	}
+
+	target := s.state.Combat.GetCombatant(targetID)
+	if target == nil || !target.IsAlive {
+		return s.textResult("Target not found or already dead."), nil
+	}
+	if target.IsPlayerChar {
+		return s.textResult("Cannot charge your own party member."), nil
+	}
+
+	moveRange := char.GetMovementRange() * 2
+	destX, destY, ok := game.FindChargeDestination(s.state.Combat, combatant, target, moveRange)
+	if !ok {
+		return s.textResult("Target is too far to charge!"), nil
+	}
+
+	var sb strings.Builder
+
+	// Move fighter to charge destination
+	if destX != combatant.GridX || destY != combatant.GridY {
+		s.state.Combat.PlaceOnGrid(combatant, destX, destY)
+		sb.WriteString(fmt.Sprintf("%s charges to (%d,%d)! ", combatant.Name, destX, destY))
+	} else {
+		sb.WriteString(fmt.Sprintf("%s charges! ", combatant.Name))
+	}
+
+	combatant.HasMoved = true
+	combatant.HasActed = true
+	combatant.HasCharged = true
+
+	// Get equipped weapon
+	var weapon *game.Item
+	if char.EquippedWeaponID != nil {
+		weapon = s.state.Items[*char.EquippedWeaponID]
+	}
+
+	result := game.CombatAttack(s.state.Combat, combatant, target, char, weapon, s.rng)
+
+	// Add charge bonus damage (+2)
+	if result.Hit {
+		result.Damage += 2
+		target.HP -= 2
+		if target.HP <= 0 && target.IsAlive {
+			target.HP = 0
+			target.IsAlive = false
+			result.TargetDied = true
+			s.state.Combat.RemoveFromGrid(target)
+			game.RemoveEngagement(s.state.Combat, target.ID)
+		}
+		result.TargetHP = target.HP
+	}
+
+	sb.WriteString(game.FormatAttackResult(result))
+
+	// Log events
+	subtype := "charge_miss"
+	if result.Hit {
+		subtype = "charge_hit"
+	}
+	s.logEvent("combat", subtype, charID, string(char.Class), targetID, map[string]interface{}{
+		"roll":   result.Roll,
+		"damage": result.Damage,
+	})
+	if result.Hit {
+		s.incrementStat(charID, "damage_dealt", result.Damage)
+	}
+	if result.TargetDied {
+		s.logEvent("death", "enemy_defeated", charID, string(char.Class), targetID, nil)
+		s.incrementStat(charID, "kills", 1)
+	}
+
+	// Cleave check after charge kill
+	if result.TargetDied && (weapon == nil || weapon.Range != game.RangeRanged) {
+		var cleaveTarget *game.Combatant
+		for _, c := range s.state.Combat.GetEnemyCombatants() {
+			if c.IsAlive && game.IsAdjacent(target.GridX, target.GridY, c.GridX, c.GridY) {
+				cleaveTarget = c
+				break
+			}
+		}
+		if cleaveTarget != nil {
+			cleaveResult := game.CombatAttack(s.state.Combat, combatant, cleaveTarget, char, weapon, s.rng)
+			sb.WriteString("\nCleave! " + game.FormatAttackResult(cleaveResult))
+			s.logEvent("combat", "cleave", charID, string(char.Class), cleaveTarget.ID, map[string]interface{}{
+				"roll":   cleaveResult.Roll,
+				"damage": cleaveResult.Damage,
+			})
+			if cleaveResult.Hit {
+				s.incrementStat(charID, "damage_dealt", cleaveResult.Damage)
+			}
+			if cleaveResult.TargetDied {
+				s.logEvent("death", "enemy_defeated", charID, string(char.Class), cleaveTarget.ID, nil)
+				s.incrementStat(charID, "kills", 1)
+			}
+		}
+	}
+
+	// Check combat end
+	msg := s.checkCombatEnd(&sb)
+	if msg != "" {
+		return s.textResult(sb.String()), nil
+	}
+
+	sb.WriteString(s.advanceTurnAndRunMonsters())
+
+	return s.textResult(sb.String()), nil
+}
+
+// handleCombatProtect has a fighter guard an adjacent ally, redirecting attacks to themselves
+func (s *Server) handleCombatProtect(charID, targetID string) (*ToolResult, error) {
+	if err := s.requireCombat(); err != nil {
+		return err, nil
+	}
+	if s.state.Combat.AwaitingScoutDecision {
+		return s.textResult(errAwaitingScoutDecision), nil
+	}
+
+	combatant, errResult := s.requirePlayerTurn(charID)
+	if errResult != nil {
+		return errResult, nil
+	}
+
+	if combatant.HasActed {
+		return s.textResult(fmt.Sprintf("%s has already acted this turn.", combatant.Name)), nil
+	}
+
+	char, errResult := s.resolveCharacter(charID)
+	if errResult != nil {
+		return errResult, nil
+	}
+
+	if char.Class != game.ClassFighter {
+		return s.textResult("Only a fighter can protect allies."), nil
+	}
+
+	if targetID == charID {
+		return s.textResult("Cannot protect yourself."), nil
+	}
+
+	targetCombatant := s.state.Combat.GetCombatant(targetID)
+	if targetCombatant == nil || !targetCombatant.IsAlive {
+		return s.textResult("Target ally not found or dead."), nil
+	}
+	if !targetCombatant.IsPlayerChar {
+		return s.textResult("Can only protect party members."), nil
+	}
+
+	if !game.IsAdjacent(combatant.GridX, combatant.GridY, targetCombatant.GridX, targetCombatant.GridY) {
+		return s.textResult(fmt.Sprintf("%s must be adjacent to %s to protect them.", combatant.Name, targetCombatant.Name)), nil
+	}
+
+	targetCombatant.ProtectedBy = combatant.ID
+	combatant.HasActed = true
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%s shields %s, ready to intercept attacks!\n", combatant.Name, targetCombatant.Name))
+
+	s.logEvent("combat", "protect", charID, string(char.Class), targetID, nil)
+
+	sb.WriteString(s.advanceTurnAndRunMonsters())
 
 	return s.textResult(sb.String()), nil
 }

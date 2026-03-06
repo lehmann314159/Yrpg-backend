@@ -88,6 +88,8 @@ type CombatantView struct {
 	MovementRange int      `json:"movementRange"`
 	AttackRange   int      `json:"attackRange"`
 	KnownSpells   []string `json:"knownSpells,omitempty"`
+	ProtectedBy   string   `json:"protectedBy,omitempty"`
+	HasCharged    bool     `json:"hasCharged"`
 }
 
 type CombatView struct {
@@ -362,6 +364,8 @@ func buildCombatView(cs *CombatState, gs *GameState) *CombatView {
 			HasActed:     c.HasActed,
 			IsAlive:      c.IsAlive,
 			IsHidden:     c.IsHidden,
+			ProtectedBy:  c.ProtectedBy,
+			HasCharged:   c.HasCharged,
 		}
 
 		if c.IsPlayerChar {

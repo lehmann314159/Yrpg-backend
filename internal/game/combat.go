@@ -32,6 +32,8 @@ type AttackResult struct {
 	TargetHP    int
 	TargetMaxHP int
 	TargetDied  bool
+	Redirected         bool
+	OriginalTargetName string
 }
 
 // MoveResult holds the outcome of a grid movement
@@ -306,24 +308,38 @@ func MonsterAttack(cs *CombatState, attacker *Combatant, target *Combatant,
 		}
 		result.Damage = dmg
 
-		// Damage wakes sleeping targets
-		target.RemoveSleep()
-
-		target.HP -= dmg
-		if target.HP <= 0 {
-			target.HP = 0
-			target.IsAlive = false
-			result.TargetDied = true
-			cs.RemoveFromGrid(target)
-			RemoveEngagement(cs, target.ID)
+		// Protection redirect: if target is protected, redirect damage to protector
+		actualTarget := target
+		if target.ProtectedBy != "" {
+			protector := cs.GetCombatant(target.ProtectedBy)
+			if protector != nil && protector.IsAlive &&
+				IsAdjacent(protector.GridX, protector.GridY, target.GridX, target.GridY) {
+				result.Redirected = true
+				result.OriginalTargetName = target.Name
+				actualTarget = protector
+				result.TargetID = protector.ID
+				result.TargetName = protector.Name
+			}
 		}
 
-		result.TargetHP = target.HP
-		result.TargetMaxHP = target.MaxHP
+		// Damage wakes sleeping targets
+		actualTarget.RemoveSleep()
+
+		actualTarget.HP -= dmg
+		if actualTarget.HP <= 0 {
+			actualTarget.HP = 0
+			actualTarget.IsAlive = false
+			result.TargetDied = true
+			cs.RemoveFromGrid(actualTarget)
+			RemoveEngagement(cs, actualTarget.ID)
+		}
+
+		result.TargetHP = actualTarget.HP
+		result.TargetMaxHP = actualTarget.MaxHP
 
 		// Create engagement (melee only)
-		if !monster.IsRanged && target.IsAlive {
-			SetEngagement(cs, attacker.ID, target.ID)
+		if !monster.IsRanged && actualTarget.IsAlive {
+			SetEngagement(cs, attacker.ID, actualTarget.ID)
 		}
 	} else {
 		result.Hit = false
@@ -332,6 +348,44 @@ func MonsterAttack(cs *CombatState, attacker *Combatant, target *Combatant,
 	}
 
 	return result
+}
+
+// --- Charge ---
+
+// FindChargeDestination finds the closest unoccupied cell adjacent to the target
+// within maxRange Chebyshev distance from the attacker. Returns (x, y, ok).
+// Ties: prefer lower Y then lower X.
+func FindChargeDestination(cs *CombatState, attacker, target *Combatant, maxRange int) (int, int, bool) {
+	bestX, bestY := -1, -1
+	bestDist := 999
+	found := false
+
+	for dy := -1; dy <= 1; dy++ {
+		for dx := -1; dx <= 1; dx++ {
+			if dx == 0 && dy == 0 {
+				continue
+			}
+			nx, ny := target.GridX+dx, target.GridY+dy
+			if nx < 0 || nx >= GridWidth || ny < 0 || ny >= GridHeight {
+				continue
+			}
+			// Allow attacker's own cell or unoccupied
+			if cs.IsCellOccupied(nx, ny) && !(nx == attacker.GridX && ny == attacker.GridY) {
+				continue
+			}
+			dist := ChebyshevDistance(attacker.GridX, attacker.GridY, nx, ny)
+			if dist > maxRange {
+				continue
+			}
+			if dist < bestDist || (dist == bestDist && (ny < bestY || (ny == bestY && nx < bestX))) {
+				bestDist = dist
+				bestX, bestY = nx, ny
+				found = true
+			}
+		}
+	}
+
+	return bestX, bestY, found
 }
 
 // --- Engagement ---
@@ -499,15 +553,22 @@ func SyncCombatToMonsters(cs *CombatState, monsters map[string]*Monster) {
 // FormatAttackResult returns a human-readable attack description
 func FormatAttackResult(r *AttackResult) string {
 	if !r.Hit {
+		displayTarget := r.TargetName
+		if r.Redirected && r.OriginalTargetName != "" {
+			displayTarget = r.OriginalTargetName
+		}
 		return fmt.Sprintf("%s attacks %s but misses! (Roll: %d vs AC %d)",
-			r.AttackerName, r.TargetName, r.ToHit, r.Defense)
+			r.AttackerName, displayTarget, r.ToHit, r.Defense)
 	}
 
 	prefix := ""
+	if r.Redirected {
+		prefix = fmt.Sprintf("%s intercepts! ", r.TargetName)
+	}
 	if r.Critical {
-		prefix = "CRITICAL HIT! "
+		prefix += "CRITICAL HIT! "
 	} else if r.Flanking {
-		prefix = "Flanking! "
+		prefix += "Flanking! "
 	}
 
 	msg := fmt.Sprintf("%s%s hits %s for %d damage!",

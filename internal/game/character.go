@@ -13,7 +13,7 @@ var ClassStatsTable = map[CharacterClass]ClassStats{
 		BaseStrength:     14,
 		BaseDexterity:    10,
 		BaseIntelligence: 8,
-		MovementRange:    2,
+		MovementRange:    3,
 		InitiativeBonus:  0,
 	},
 	ClassMagicUser: {

@@ -123,7 +123,7 @@ Examine the current room. Returns exits, monsters, items, and discovered traps.
 
 #### `move`
 
-Move the party in a direction. Triggers the room entry sequence on first visit: trap detection, sneak check, combat initiation.
+Move the party in a direction. Triggers the room entry sequence on first visit. Also triggers combat on re-entry if surviving monsters are present.
 
 **Arguments:**
 | Name | Type | Required | Description |
@@ -136,14 +136,18 @@ Move the party in a direction. Triggers the room entry sequence on first visit: 
 ```
 
 **Room Entry Sequence (first visit only):**
-1. **Trap detection** - Party attempts to spot room traps. Thieves get a detection bonus.
-2. **Undetected traps trigger** on the point character (first alive in formation).
-3. **Sneak check** - If monsters are present and the party has a thief, a stealth roll is made. Success gives the thief a hidden advantage in combat.
+1. **Sneak check** - If monsters are present and the party has an alive thief, a stealth roll is made.
+   - **Success:** Only the thief enters the room. Solo trap detection runs. Scout combat begins (thief hidden, initiative 100, double movement). This is equivalent to a `scout_ahead` surprise round.
+   - **Failure:** Falls through to normal party entry below.
+2. **Party enters** - All characters move into the room.
+3. **Trap detection** - Party attempts to spot room traps. Thieves get a detection bonus. Detected traps still trigger on the first non-thief character. Undetected traps trigger on the point character (first alive in formation).
 4. **Combat begins** if enemies are present.
+
+**Re-entry:** Moving into a previously visited room with surviving monsters (e.g. after a scout retreat) triggers combat again.
 
 **Errors:**
 - No exit in that direction
-- Monsters blocking the path (must defeat them first)
+- Monsters in current room (must defeat them before leaving)
 - Currently in combat
 
 ---
@@ -162,6 +166,43 @@ Have a character pick up an item from the current room floor.
 ```json
 { "name": "take", "arguments": { "character_id": "abc...", "item_id": "def..." } }
 ```
+
+---
+
+#### `drop_item`
+
+Drop an item from a character's inventory onto the current room floor. Auto-unequips if the item is equipped.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `character_id` | string | Yes | ID of the character dropping the item |
+| `item_id` | string | Yes | ID of the item to drop |
+
+**Notes:**
+- If the item is equipped, it is automatically unequipped before dropping
+- Item appears on the current room's floor and can be picked up by any character
+
+---
+
+#### `give_item`
+
+Transfer an item from one character to another party member. Auto-unequips if the item is equipped.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `character_id` | string | Yes | ID of the character giving the item |
+| `item_id` | string | Yes | ID of the item to give |
+| `target_character_id` | string | Yes | ID of the character receiving the item |
+
+**Notes:**
+- If the item is equipped, it is automatically unequipped before transferring
+- Cannot give an item to the same character
+
+**Errors:**
+- Item not in the giver's inventory
+- Same character as giver and receiver
 
 ---
 
@@ -232,7 +273,7 @@ Open a chest in the current room. Reveals chest loot. May trigger a chest trap.
 
 #### `disarm_trap`
 
-Have a character attempt to disarm a discovered trap.
+Have a character attempt to disarm a discovered trap. Also usable by the scouting thief during the scout decision phase.
 
 **Arguments:**
 | Name | Type | Required | Description |
@@ -397,6 +438,27 @@ Cast a known spell during combat. Any known spell can be cast.
 
 ---
 
+#### `combat_cantrip`
+
+Magic user fires a free ranged arcane bolt at a target. No spell slot cost.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `character_id` | string | Yes | ID of the magic_user character |
+| `target_id` | string | Yes | ID of the enemy combatant to target |
+
+**Mechanics:**
+- Only magic users can use this
+- Range: 3 (Chebyshev distance)
+- Attack roll: d20 + INT/2 vs target AC
+- Damage: 1d4 + INT/2 (minimum 1)
+- Critical hit (natural 20): 2d4 + INT/2
+- Free action — does not cost a spell slot
+- Consumes the character's action for the turn
+
+---
+
 #### `rest`
 
 Rest in a cleared room to recover HP and spell slots. Risk of wandering monster ambush.
@@ -435,8 +497,8 @@ Move a character on the 6x6 combat grid.
 | `y` | number | Yes | Target Y position (0-5) |
 
 **Notes:**
-- Movement cost uses Manhattan distance
-- Fighters and magic users: 2 cells. Thieves: 4 cells.
+- Movement cost uses Chebyshev distance (diagonal moves cost 1)
+- Fighters: 3 cells. Magic users: 2 cells. Thieves: 4 cells.
 - Cannot move to occupied or blocked cells
 - One move per turn
 
@@ -542,6 +604,56 @@ After a successful `scout_ahead` surprise round, signal the rest of the party to
 
 ---
 
+#### `combat_charge`
+
+Fighter charges toward an enemy with double movement range and attacks with +2 bonus damage. Combines move + attack into one action.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `character_id` | string | Yes | ID of the fighter character |
+| `target_id` | string | Yes | ID of the enemy to charge |
+
+**Mechanics:**
+1. Must be a fresh turn — cannot have already moved or acted
+2. Can only be used once per combat
+3. Fighter moves up to double their movement range (6 cells) to a cell adjacent to the target
+3. Attack is executed with +2 bonus damage on hit
+4. If the charge kill triggers cleave (see below), the cleave attack fires automatically
+5. Consumes both move and action
+
+**Errors:**
+- Character is not a fighter
+- Already moved or acted this turn
+- Target is too far (no adjacent cell within 6 cells of fighter)
+- Target is dead or friendly
+
+---
+
+#### `combat_protect`
+
+Fighter guards an adjacent ally. Monster attacks targeting that ally are redirected to the fighter for 1 round.
+
+**Arguments:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `character_id` | string | Yes | ID of the fighter character |
+| `target_id` | string | Yes | ID of the ally to protect |
+
+**Mechanics:**
+- Sets `protectedBy` on the target combatant to the fighter's ID
+- Protection lasts until the start of the next round
+- When a monster attacks the protected ally, damage is redirected to the fighter (if the fighter is still alive and adjacent)
+- Consumes the fighter's action
+
+**Errors:**
+- Character is not a fighter
+- Already acted this turn
+- Target is self, dead, or an enemy
+- Fighter is not adjacent to the target ally
+
+---
+
 #### `end_turn`
 
 End the current character's turn without acting.
@@ -562,20 +674,21 @@ Every successful response includes a `gameState` object with the complete game s
 ```typescript
 interface GameStateSnapshot {
   mode: "exploration" | "combat";
-  party: PartyView | null;
-  currentRoom: RoomView | null;
-  monsters: MonsterView[];
-  roomItems: ItemView[];
-  roomTraps: TrapView[];           // discovered traps + unopened chests
-  combat: CombatView | null;
-  mapGrid: MapCell[][];
+  party?: PartyView;               // omitted when null
+  currentRoom?: RoomView;          // omitted when null
+  monsters?: MonsterView[];        // omitted when empty
+  roomItems?: ItemView[];          // omitted when empty
+  roomTraps?: TrapView[];          // discovered traps + unopened chests; omitted when empty
+  combat?: CombatView;             // omitted when not in combat
   gameOver: boolean;
   victory: boolean;
   turnNumber: number;
-  message: string;
-  lastEvent: GameEvent | null;
+  message?: string;                // omitted when empty
+  lastEvent?: GameEvent;           // omitted when null
 }
 ```
+
+**Note:** Fields marked `?` use `omitempty` in JSON serialization — they are absent from the response when null/empty, not present as `null`.
 
 ---
 
@@ -606,17 +719,18 @@ interface CharacterView {
   intelligence: number;
   spellSlots: number;              // 0 for non-magic_user
   maxSpellSlots: number;
-  knownSpells: string[];           // empty for non-magic_user
+  knownSpells?: string[];          // omitted for non-magic_user; present for casters
   ac: number;                      // effective AC: 10 + armor bonus + active buff bonuses
   isAlive: boolean;
   status: "Healthy" | "Wounded" | "Critical" | "Dead";
+  inventory: ItemView[];           // all items carried by this character
 }
 ```
 
 **Status Thresholds:**
 - `Healthy`: HP > 75% of max
-- `Wounded`: HP 40-75% of max
-- `Critical`: HP < 40% of max
+- `Wounded`: HP > 40% and <= 75% of max
+- `Critical`: HP <= 40% of max (and alive)
 - `Dead`: HP <= 0
 
 ---
@@ -625,14 +739,16 @@ interface CharacterView {
 
 | Class | HP | STR | DEX | INT | Move | Init Bonus |
 |-------|-----|-----|-----|-----|------|------------|
-| fighter | 30 | 14 | 10 | 8 | 2 | +0 |
+| fighter | 30 | 14 | 10 | 8 | 3 | +0 |
 | magic_user | 16 | 8 | 10 | 16 | 2 | +0 |
 | thief | 22 | 10 | 14 | 10 | 4 | +2 |
 
+**HP Progression:** All alive characters gain +2 MaxHP (and +2 current HP) on each combat victory. Base HP values above reflect starting stats only.
+
 **Special abilities:**
-- **Fighter:** Highest HP and STR. Best melee damage.
-- **Magic User:** Spell slots (INT / 5). Starts with heal + fireball. Can learn spells from scrolls. +6 scroll bonus.
-- **Thief:** +4 movement. +2 initiative. +6 trap disarm. +4 retreat. Can sneak/scout. Can hide in combat.
+- **Fighter:** Highest HP and STR. Best melee damage. **Charge** (double move + attack with +2 damage). **Cleave** (free melee attack on adjacent enemy when a kill is scored). **Protect** (redirect attacks on an adjacent ally to the fighter for 1 round).
+- **Magic User:** Spell slots (INT / 4). Starts with heal + fireball. Can learn spells from scrolls. +6 scroll bonus. **Cantrip** (free ranged attack, no spell slot cost). Recovers 1 spell slot on combat victory.
+- **Thief:** +4 movement. +2 initiative. +6 trap disarm. +4 retreat. Can sneak/scout/scout_ahead. Can hide in combat.
 
 ---
 
@@ -709,6 +825,7 @@ interface TrapView {
   id: string;
   description: string;
   location: "room" | "chest";
+  isTriggered: boolean;            // true if the trap has already been triggered
   isDisarmed: boolean;
   isOpened: boolean;               // true once chest has been opened (loot revealed)
   difficulty: number;              // DC for disarm attempt (0 for untrapped chests)
@@ -750,16 +867,18 @@ interface CombatantView {
   hasActed: boolean;
   isAlive: boolean;
   isHidden: boolean;
-  movementRange: number;           // max cells per turn (Manhattan distance)
+  movementRange: number;           // max cells per turn (Chebyshev distance)
   attackRange: number;             // max attack distance (Chebyshev distance)
   knownSpells?: string[];          // spell IDs for magic users, omitted for others
+  protectedBy?: string;            // fighter ID protecting this combatant (empty if none)
+  hasCharged: boolean;             // true if fighter has used charge this combat
 }
 ```
 
 **`movementRange` values:**
 | Source | Value |
 |--------|-------|
-| Fighter | 2 |
+| Fighter | 3 |
 | Magic User | 2 |
 | Thief | 4 (8 during scout phase) |
 | All monsters | 2 |
@@ -774,35 +893,24 @@ interface CombatantView {
 
 **`knownSpells`:** Present only for magic users. Contains spell IDs (e.g. `"heal"`, `"fireball"`). Omitted from JSON for non-casters.
 
----
-
-### MapCell
-
-```typescript
-interface MapCell {
-  x: number;
-  y: number;
-  roomId?: string;
-  status: "unknown" | "visited" | "current" | "adjacent" | "exit";
-  hasPlayer: boolean;
-  exits?: string[];
-}
-```
+**`protectedBy`:** When set, contains the fighter combatant ID who is protecting this combatant. Monster attacks on a protected combatant are redirected to the protector. Cleared at the start of each round. Omitted from JSON when empty.
 
 ---
 
 ### GameEvent
 
+**Note:** GameEvent and EventDetails use **snake_case** JSON keys (unlike the rest of the snapshot which uses camelCase).
+
 ```typescript
 interface GameEvent {
-  sessionId: string;
-  turnNumber: number;
-  eventType: string;
-  eventSubtype: string;
-  actorId: string;
-  actorClass: string;
-  targetId: string;
-  roomId: string;
+  session_id: string;
+  turn_number: number;
+  event_type: string;
+  event_subtype: string;
+  actor_id: string;
+  actor_class: string;
+  target_id: string;
+  room_id: string;
   details: EventDetails;
 }
 
@@ -810,19 +918,19 @@ interface EventDetails {
   roll?: number;
   dc?: number;
   damage?: number;
-  wasCritical?: boolean;
-  wasFlanking?: boolean;
-  weaponUsed?: string;
-  partyHp?: Record<string, number>;
-  partyAlive?: number;
-  actorPos?: { x: number; y: number };
-  targetPos?: { x: number; y: number };
-  itemName?: string;
-  scrollEffect?: string;
+  was_critical?: boolean;
+  was_flanking?: boolean;
+  weapon_used?: string;
+  party_hp?: Record<string, number>;
+  party_alive?: number;
+  actor_pos?: { x: number; y: number };
+  target_pos?: { x: number; y: number };
+  item_name?: string;
+  scroll_effect?: string;
   success?: boolean;
-  trapDifficulty?: number;
-  wasDetected?: boolean;
-  resultText?: string;
+  trap_difficulty?: number;
+  was_detected?: boolean;
+  result_text?: string;
 }
 ```
 
@@ -830,7 +938,7 @@ interface EventDetails {
 
 | Type | Subtypes |
 |------|----------|
-| `combat` | `attack_hit`, `attack_miss`, `critical_hit`, `flanking_attack`, `monster_attack_hit`, `monster_attack_miss`, `combat_victory`, `retreat_success`, `retreat_fail`, `ambush` |
+| `combat` | `attack_hit`, `attack_miss`, `critical_hit`, `flanking_attack`, `monster_attack_hit`, `monster_attack_miss`, `combat_victory`, `retreat_success`, `retreat_fail`, `ambush`, `charge_hit`, `charge_miss`, `cleave`, `protect` |
 | `spell` | `spell_cast`, `combat_spell_cast` |
 | `item` | `consumable_used`, `scroll_success`, `scroll_fail`, `scroll_backfire` |
 | `trap` | `trap_detected`, `trap_triggered`, `trap_disarmed`, `disarm_failed` |
@@ -855,7 +963,9 @@ interface EventDetails {
 | `shield` | Shield | Yes | +4 AC to all party combatants for 3 rounds |
 | `sleep` | Sleep | Yes | Target skips 2 turns (damage wakes them) |
 
-**Spell Slots:** Magic users get INT / 5 spell slots. Recharged by resting.
+**Spell Slots:** Magic users get INT / 4 spell slots. Recharged by resting. Recover 1 spell slot on combat victory.
+
+**Combat Victory Rewards:** All alive characters gain +2 MaxHP and +2 HP. Magic users recover 1 spell slot.
 
 **Starting Spells:** Magic users begin knowing `heal` and `fireball`.
 
@@ -872,7 +982,7 @@ interface EventDetails {
 
 ### Grid
 - 6x6 grid. Party spawns at row 0, monsters at rows 4-5.
-- Movement: Manhattan distance.
+- Movement: Chebyshev distance (diagonal moves cost 1).
 - Adjacency/attack range: Chebyshev distance (diagonals = 1).
 
 ### Attack Roll
@@ -896,6 +1006,27 @@ Monsters act automatically after player turns:
 - **Melee:** Move toward nearest visible player (2 cells/turn), attack if adjacent
 - **Ranged:** Attack if in range, otherwise move closer
 - **Targeting:** Prefer engaged target, then nearest non-hidden player
+
+### Fighter Abilities
+
+**Charge (`combat_charge`):**
+- Once per combat
+- Requires fresh turn (no prior move or action)
+- Moves up to double movement range (6 cells) to a cell adjacent to the target
+- Attacks with +2 bonus damage
+- Consumes both move and action
+
+**Cleave (passive):**
+- Triggers when a fighter kills an enemy with a melee attack (via `combat_attack` or `combat_charge`)
+- Automatically attacks one alive enemy adjacent to the killed target's position
+- No chain-cleaving — only one cleave per kill
+
+**Protect (`combat_protect`):**
+- Fighter must be adjacent to the ally
+- Sets `protectedBy` on the ally for 1 round
+- Monster attacks on the protected ally are redirected to the fighter
+- Redirect requires the fighter to still be alive and adjacent when the attack lands
+- Cleared at the start of each new round
 
 ### Engagement
 - Melee attacks create mutual engagement between attacker and target
@@ -951,10 +1082,10 @@ Monsters act automatically after player turns:
           "intelligence": 8,
           "spellSlots": 0,
           "maxSpellSlots": 0,
-          "knownSpells": [],
           "ac": 10,
           "isAlive": true,
-          "status": "Healthy"
+          "status": "Healthy",
+          "inventory": []
         },
         {
           "id": "char_002",
@@ -966,11 +1097,12 @@ Monsters act automatically after player turns:
           "dexterity": 10,
           "intelligence": 16,
           "spellSlots": 2,
-          "maxSpellSlots": 3,
+          "maxSpellSlots": 4,
           "knownSpells": ["heal", "fireball"],
           "ac": 10,
           "isAlive": true,
-          "status": "Healthy"
+          "status": "Healthy",
+          "inventory": []
         }
       ],
       "formation": ["char_001", "char_002"]

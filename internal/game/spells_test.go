@@ -37,11 +37,11 @@ func TestCalcMaxSlots(t *testing.T) {
 		want         int
 	}{
 		{0, 0},
-		{4, 0},
-		{5, 1},
+		{3, 0},
+		{4, 1},
 		{10, 2},
-		{16, 3},
-		{24, 4},
+		{16, 4},
+		{24, 6},
 	}
 
 	for _, tt := range tests {

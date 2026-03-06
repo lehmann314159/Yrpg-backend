@@ -1033,10 +1033,11 @@ func (s *Server) handleOpenChest(charID string) (*ToolResult, error) {
 
 // handleDisarmTrap has a character attempt to disarm a discovered trap
 func (s *Server) handleDisarmTrap(charID, trapID string) (*ToolResult, error) {
-	// Allow during exploration OR during scout phase (thief only)
+	// Allow during exploration OR during scout phase/decision (thief only)
 	if s.state.InCombat() {
 		cs := s.state.Combat
-		if !cs.AwaitingScoutDecision || charID != cs.ScoutID {
+		isScout := charID == cs.ScoutID
+		if !(isScout && (cs.IsScoutPhase || cs.AwaitingScoutDecision)) {
 			return &ToolResult{Content: []ContentBlock{{Type: "text", Text: errInCombat}}}, nil
 		}
 	} else if err := s.requireExploration(); err != nil {
@@ -1094,6 +1095,18 @@ func (s *Server) handleDisarmTrap(charID, trapID string) (*ToolResult, error) {
 				"cause": "failed_disarm",
 			})
 		}
+
+		// Sync trap damage to combatant so endCombat doesn't overwrite it
+		if s.state.InCombat() {
+			if combatant := s.state.Combat.GetCombatant(charID); combatant != nil {
+				combatant.HP = char.HP
+				if !char.IsAlive {
+					combatant.IsAlive = false
+					s.state.Combat.RemoveFromGrid(combatant)
+				}
+			}
+		}
+
 		if s.state.Party.IsWiped() {
 			s.state.GameOver = true
 			s.finalizeSession("party_wipe")

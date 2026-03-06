@@ -397,6 +397,18 @@ func (s *Server) ListTools() []Tool {
 			},
 		},
 		{
+			Name:        "combat_cantrip",
+			Description: "Magic user fires a minor arcane bolt at a target. Free ranged attack (no spell slot cost). Uses Intelligence for accuracy. Range 3. Damage: 1d4 + INT/2.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"character_id": map[string]interface{}{"type": "string", "description": "ID of the magic_user character"},
+					"target_id":    map[string]interface{}{"type": "string", "description": "ID of the enemy to target"},
+				},
+				"required": []string{"character_id", "target_id"},
+			},
+		},
+		{
 			Name:        "rest",
 			Description: "Rest in a cleared room to recover HP and spell slots. Risk of ambush by wandering monsters.",
 			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
@@ -513,6 +525,30 @@ func (s *Server) ListTools() []Tool {
 				"required": []string{"character_id"},
 			},
 		},
+		{
+			Name:        "combat_charge",
+			Description: "Fighter charges toward an enemy with double movement and attacks with +2 bonus damage. Requires a fresh turn (no prior move or action). Once per combat.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"character_id": map[string]interface{}{"type": "string", "description": "ID of the fighter character"},
+					"target_id":    map[string]interface{}{"type": "string", "description": "ID of the enemy to charge"},
+				},
+				"required": []string{"character_id", "target_id"},
+			},
+		},
+		{
+			Name:        "combat_protect",
+			Description: "Fighter guards an adjacent ally. Monster attacks targeting that ally are redirected to the fighter for 1 round.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"character_id": map[string]interface{}{"type": "string", "description": "ID of the fighter character"},
+					"target_id":    map[string]interface{}{"type": "string", "description": "ID of the ally to protect"},
+				},
+				"required": []string{"character_id", "target_id"},
+			},
+		},
 	}
 }
 
@@ -625,6 +661,13 @@ func (s *Server) CallTool(name string, arguments map[string]interface{}) (*ToolR
 			return nil, fmt.Errorf("character_id and spell_id are required")
 		}
 		return s.handleCombatCastSpell(charID, spellID, targetID)
+	case "combat_cantrip":
+		charID, _ := arguments["character_id"].(string)
+		targetID, _ := arguments["target_id"].(string)
+		if charID == "" || targetID == "" {
+			return nil, fmt.Errorf("character_id and target_id are required")
+		}
+		return s.handleCombatCantrip(charID, targetID)
 	case "rest":
 		return s.handleRest()
 
@@ -678,6 +721,22 @@ func (s *Server) CallTool(name string, arguments map[string]interface{}) (*ToolR
 			return nil, fmt.Errorf("character_id is required")
 		}
 		return s.handleEndTurn(charID)
+
+	// Fighter tools
+	case "combat_charge":
+		charID, _ := arguments["character_id"].(string)
+		targetID, _ := arguments["target_id"].(string)
+		if charID == "" || targetID == "" {
+			return nil, fmt.Errorf("character_id and target_id are required")
+		}
+		return s.handleCombatCharge(charID, targetID)
+	case "combat_protect":
+		charID, _ := arguments["character_id"].(string)
+		targetID, _ := arguments["target_id"].(string)
+		if charID == "" || targetID == "" {
+			return nil, fmt.Errorf("character_id and target_id are required")
+		}
+		return s.handleCombatProtect(charID, targetID)
 
 	// Scout tools
 	case "scout_ahead":

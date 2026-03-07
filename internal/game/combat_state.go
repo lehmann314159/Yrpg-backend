@@ -6,8 +6,9 @@ import (
 )
 
 const (
-	GridWidth  = 6
-	GridHeight = 6
+	GridWidth            = 6
+	GridHeight           = 6
+	MonsterMovementRange = 2
 )
 
 // charArmorBonus returns the armor bonus for a character based on their equipped armor.

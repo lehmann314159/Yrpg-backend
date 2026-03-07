@@ -1,0 +1,19 @@
+services:
+  yrpg-backend:
+    image: lehmann314159/yrpg-backend:latest
+    environment:
+      - PORT=8080
+      - DB_PATH=/data/yrpg.db
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+    volumes:
+      - yrpg-data:/data
+    restart: unless-stopped
+    networks:
+      - web
+
+volumes:
+  yrpg-data:
+
+networks:
+  web:
+    external: true

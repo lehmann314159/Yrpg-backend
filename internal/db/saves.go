@@ -37,7 +37,7 @@ func (db *DB) LoadGame(id string) (*SavedGame, error) {
 	sg := &SavedGame{}
 	err := row.Scan(&sg.ID, &sg.SessionID, &sg.StateJSON, &sg.SavedAt)
 	if err == sql.ErrNoRows {
-		return nil, nil
+		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to load game: %w", err)
@@ -54,7 +54,7 @@ func (db *DB) LoadGameBySession(sessionID string) (*SavedGame, error) {
 	sg := &SavedGame{}
 	err := row.Scan(&sg.ID, &sg.SessionID, &sg.StateJSON, &sg.SavedAt)
 	if err == sql.ErrNoRows {
-		return nil, nil
+		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to load game by session: %w", err)

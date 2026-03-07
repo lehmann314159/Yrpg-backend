@@ -3,10 +3,14 @@ package db
 import (
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// ErrNotFound is returned when a query finds no matching row.
+var ErrNotFound = errors.New("not found")
 
 //go:embed schema.sql
 var schemaFS embed.FS

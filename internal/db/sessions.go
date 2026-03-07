@@ -77,7 +77,7 @@ func (db *DB) GetSession(id string) (*Session, error) {
 		&s.TurnsTotal, &s.RoomsExplored, &s.MonstersDefeated,
 		&s.TrapsEncountered, &s.CharactersLost, &s.DungeonDepth)
 	if err == sql.ErrNoRows {
-		return nil, nil
+		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session: %w", err)

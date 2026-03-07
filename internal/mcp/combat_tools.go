@@ -150,7 +150,7 @@ func (s *Server) handleCombatAttack(charID, targetID string) (*ToolResult, error
 		return s.textResult(sb.String()), nil
 	}
 
-	sb.WriteString(game.FormatAttackResult(result))
+	sb.WriteString(FormatAttackResult(result))
 
 	// Log combat event
 	subtype := "attack_miss"
@@ -190,7 +190,7 @@ func (s *Server) handleCombatAttack(charID, targetID string) (*ToolResult, error
 		}
 		if cleaveTarget != nil {
 			cleaveResult := game.CombatAttack(s.state.Combat, combatant, cleaveTarget, char, weapon, s.rng)
-			sb.WriteString("\nCleave! " + game.FormatAttackResult(cleaveResult))
+			sb.WriteString("\nCleave! " + FormatAttackResult(cleaveResult))
 			s.logEvent("combat", "cleave", charID, string(char.Class), cleaveTarget.ID, map[string]interface{}{
 				"roll":   cleaveResult.Roll,
 				"damage": cleaveResult.Damage,
@@ -330,7 +330,7 @@ func (s *Server) handleCombatHide(charID string) (*ToolResult, error) {
 	combatant.HasActed = true
 
 	var sb strings.Builder
-	sb.WriteString(game.FormatCombatHideResult(result))
+	sb.WriteString(FormatCombatHideResult(result))
 	sb.WriteString("\n")
 
 	if result.Success {
@@ -386,7 +386,7 @@ func (s *Server) handleCombatRetreat(charID string) (*ToolResult, error) {
 
 		// Has engagement: standard retreat roll
 		result := game.AttemptRetreat(cs, combatant, char, s.rng)
-		sb.WriteString(game.FormatRetreatResult(result))
+		sb.WriteString(FormatRetreatResult(result))
 		sb.WriteString("\n")
 
 		// Sync HP from opportunity attack
@@ -464,7 +464,7 @@ func (s *Server) handleCombatRetreat(charID string) (*ToolResult, error) {
 	})
 
 	var sb strings.Builder
-	sb.WriteString(game.FormatRetreatResult(result))
+	sb.WriteString(FormatRetreatResult(result))
 	sb.WriteString("\n")
 
 	// Sync HP changes from opportunity attacks
@@ -1133,7 +1133,7 @@ func (s *Server) handleScoutAhead(charID, direction string) (*ToolResult, error)
 
 	currentRoom := s.state.GetCurrentRoom()
 	if currentRoom == nil {
-		return s.errorResult("Error: current room not found."), nil
+		return s.errorResult("Current room not found."), nil
 	}
 
 	// Can't leave if monsters are alive in current room
@@ -1164,7 +1164,7 @@ func (s *Server) handleScoutAhead(charID, direction string) (*ToolResult, error)
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("%s creeps into the room to the %s...\n\n", char.Name, direction))
-	sb.WriteString(fmt.Sprintf("%s\n", game.FormatSneakResult(sneakResult)))
+	sb.WriteString(fmt.Sprintf("%s\n", FormatSneakResult(sneakResult)))
 
 	subtype := "scout_ahead_fail"
 	if sneakResult.Success {
@@ -1183,33 +1183,13 @@ func (s *Server) handleScoutAhead(charID, direction string) (*ToolResult, error)
 
 		// Handle traps on first visit using solo detection
 		if isFirstVisit {
-			roomTraps := s.state.GetRoomTraps(targetRoomID)
-			for _, trap := range roomTraps {
-				if trap.Location == game.TrapRoom && !trap.IsTriggered && !trap.IsDisarmed {
-					detection := game.CheckTrapDetectionSolo(char, trap, s.rng)
-					if detection.Detected {
-						sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapDetection(detection)))
-					} else {
-						// Trap triggers on the thief
-						trigger := game.TriggerTrap(trap, char, s.rng)
-						sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapTrigger(trigger)))
-						if !char.IsAlive {
-							s.state.GameOver = true
-							s.finalizeSession("party_wipe")
-							sb.WriteString("\nThe scout has fallen! Game over.\nUse 'new_game' to play again.")
-							return s.textResult(sb.String()), nil
-						}
-					}
-				}
-			}
-			// Chest trap detection (passive only — chests don't trigger on entry)
-			for _, trap := range roomTraps {
-				if trap.Location == game.TrapChest && !trap.IsTriggered && !trap.IsDisarmed && trap.Damage > 0 {
-					detection := game.CheckTrapDetectionSolo(char, trap, s.rng)
-					if detection.Detected {
-						sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapDetection(detection)))
-					}
-				}
+			trapText, thiefDied := s.detectTrapsSolo(char, targetRoomID)
+			sb.WriteString(trapText)
+			if thiefDied {
+				s.state.GameOver = true
+				s.finalizeSession("party_wipe")
+				sb.WriteString("\nThe scout has fallen! Game over.\nUse 'new_game' to play again.")
+				return s.textResult(sb.String()), nil
 			}
 		}
 
@@ -1239,47 +1219,13 @@ func (s *Server) handleScoutAhead(charID, direction string) (*ToolResult, error)
 
 		// Handle traps on first visit (full party detection)
 		if isFirstVisit {
-			roomTraps := s.state.GetRoomTraps(targetRoomID)
-			for _, trap := range roomTraps {
-				if trap.Location == game.TrapRoom && !trap.IsTriggered && !trap.IsDisarmed {
-					detection := game.CheckTrapDetection(s.state.Party, trap, s.rng)
-					if detection.Detected {
-						sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapDetection(detection)))
-						// Detected trap still triggers on first non-thief
-						victim := s.state.Party.FirstNonThief()
-						if victim != nil {
-							trigger := game.TriggerTrap(trap, victim, s.rng)
-							sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapTrigger(trigger)))
-							if s.state.Party.IsWiped() {
-								s.state.GameOver = true
-								s.finalizeSession("party_wipe")
-								sb.WriteString("\nYour entire party has fallen. Game over.\nUse 'new_game' to play again.")
-								return s.textResult(sb.String()), nil
-							}
-						}
-					} else {
-						point := s.state.Party.PointCharacter()
-						if point != nil {
-							trigger := game.TriggerTrap(trap, point, s.rng)
-							sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapTrigger(trigger)))
-							if s.state.Party.IsWiped() {
-								s.state.GameOver = true
-								s.finalizeSession("party_wipe")
-								sb.WriteString("\nYour entire party has fallen. Game over.\nUse 'new_game' to play again.")
-								return s.textResult(sb.String()), nil
-							}
-						}
-					}
-				}
-			}
-			// Chest trap detection (passive only)
-			for _, trap := range roomTraps {
-				if trap.Location == game.TrapChest && !trap.IsTriggered && !trap.IsDisarmed && trap.Damage > 0 {
-					detection := game.CheckTrapDetection(s.state.Party, trap, s.rng)
-					if detection.Detected {
-						sb.WriteString(fmt.Sprintf("\n%s\n", game.FormatTrapDetection(detection)))
-					}
-				}
+			trapText, wiped := s.detectTrapsParty(targetRoomID)
+			sb.WriteString(trapText)
+			if wiped {
+				s.state.GameOver = true
+				s.finalizeSession("party_wipe")
+				sb.WriteString("\nYour entire party has fallen. Game over.\nUse 'new_game' to play again.")
+				return s.textResult(sb.String()), nil
 			}
 		}
 
@@ -1316,26 +1262,13 @@ func (s *Server) handleSignalParty(charID string) (*ToolResult, error) {
 	sb.WriteString(fmt.Sprintf("%s signals the party! They rush into the room.\n\n", scout.Name))
 
 	// Discovered-but-not-disarmed room traps trigger on first non-thief
-	roomTraps := s.state.GetRoomTraps(scout.CurrentRoomID)
-	for _, trap := range roomTraps {
-		if trap.Location == game.TrapRoom && trap.IsDiscovered && !trap.IsTriggered && !trap.IsDisarmed {
-			victim := s.state.Party.FirstNonThief()
-			if victim != nil {
-				trigger := game.TriggerTrap(trap, victim, s.rng)
-				sb.WriteString(fmt.Sprintf("%s\n", game.FormatTrapTrigger(trigger)))
-				if !victim.IsAlive {
-					s.logEvent("death", "character_killed", victim.ID, string(victim.Class), trap.ID, map[string]interface{}{
-						"cause": "trap",
-					})
-				}
-				if s.state.Party.IsWiped() {
-					s.state.GameOver = true
-					s.finalizeSession("party_wipe")
-					sb.WriteString("\nYour entire party has fallen. Game over.\nUse 'new_game' to play again.")
-					return s.textResult(sb.String()), nil
-				}
-			}
-		}
+	trapText, wiped := s.triggerDiscoveredTraps(scout.CurrentRoomID)
+	sb.WriteString(trapText)
+	if wiped {
+		s.state.GameOver = true
+		s.finalizeSession("party_wipe")
+		sb.WriteString("\nYour entire party has fallen. Game over.\nUse 'new_game' to play again.")
+		return s.textResult(sb.String()), nil
 	}
 
 	// Add remaining party members to combat
@@ -1447,7 +1380,7 @@ func (s *Server) handleCombatCharge(charID, targetID string) (*ToolResult, error
 		result.TargetHP = target.HP
 	}
 
-	sb.WriteString(game.FormatAttackResult(result))
+	sb.WriteString(FormatAttackResult(result))
 
 	// Log events
 	subtype := "charge_miss"
@@ -1477,7 +1410,7 @@ func (s *Server) handleCombatCharge(charID, targetID string) (*ToolResult, error
 		}
 		if cleaveTarget != nil {
 			cleaveResult := game.CombatAttack(s.state.Combat, combatant, cleaveTarget, char, weapon, s.rng)
-			sb.WriteString("\nCleave! " + game.FormatAttackResult(cleaveResult))
+			sb.WriteString("\nCleave! " + FormatAttackResult(cleaveResult))
 			s.logEvent("combat", "cleave", charID, string(char.Class), cleaveTarget.ID, map[string]interface{}{
 				"roll":   cleaveResult.Roll,
 				"damage": cleaveResult.Damage,

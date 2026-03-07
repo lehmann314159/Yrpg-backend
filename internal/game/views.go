@@ -90,6 +90,7 @@ type CombatantView struct {
 	KnownSpells   []string `json:"knownSpells,omitempty"`
 	ProtectedBy   string   `json:"protectedBy,omitempty"`
 	HasCharged    bool     `json:"hasCharged"`
+	ChargeRange   int      `json:"chargeRange,omitempty"`
 }
 
 type CombatView struct {
@@ -381,13 +382,16 @@ func buildCombatView(cs *CombatState, gs *GameState) *CombatView {
 							view.AttackRange = weapon.MaxRange
 						}
 					}
+					if char.Class == ClassFighter {
+						view.ChargeRange = char.GetMovementRange() * 2
+					}
 					if len(char.KnownSpells) > 0 {
 						view.KnownSpells = char.KnownSpells
 					}
 				}
 			}
 		} else {
-			view.MovementRange = 2
+			view.MovementRange = MonsterMovementRange
 			view.AttackRange = 1
 			if monster, ok := gs.Monsters[c.CharacterID]; ok && monster.IsRanged {
 				view.AttackRange = monster.AttackRange

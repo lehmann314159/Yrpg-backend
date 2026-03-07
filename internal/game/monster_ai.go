@@ -138,9 +138,8 @@ func monsterMeleeTurn(cs *CombatState, combatant *Combatant, monster *Monster,
 }
 
 // moveToward moves a combatant one step toward the target using simple greedy movement.
-// Monsters move up to 2 cells (default monster movement).
 func moveToward(cs *CombatState, combatant *Combatant, target *Combatant) {
-	movesLeft := 2 // default monster movement range
+	movesLeft := MonsterMovementRange
 
 	for movesLeft > 0 {
 		bestX, bestY := combatant.GridX, combatant.GridY

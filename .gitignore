@@ -1,5 +1,6 @@
 # Binary
 yrpg-server
+yrpg-backend
 
 # Database files
 *.db

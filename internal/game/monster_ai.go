@@ -65,7 +65,7 @@ func monsterRangedTurn(cs *CombatState, combatant *Combatant, monster *Monster,
 	}
 
 	// Move closer, then try to attack
-	moveToward(cs, combatant, nearest)
+	moveToward(cs, combatant, nearest, rng)
 	action.MovedTo = &GridPos{X: combatant.GridX, Y: combatant.GridY}
 
 	newDist := ChebyshevDistance(combatant.GridX, combatant.GridY, nearest.GridX, nearest.GridY)
@@ -120,7 +120,7 @@ func monsterMeleeTurn(cs *CombatState, combatant *Combatant, monster *Monster,
 	}
 
 	// Move toward nearest player
-	moveToward(cs, combatant, nearest)
+	moveToward(cs, combatant, nearest, rng)
 	action.MovedTo = &GridPos{X: combatant.GridX, Y: combatant.GridY}
 	combatant.HasMoved = true
 
@@ -138,12 +138,12 @@ func monsterMeleeTurn(cs *CombatState, combatant *Combatant, monster *Monster,
 }
 
 // moveToward moves a combatant one step toward the target using simple greedy movement.
-func moveToward(cs *CombatState, combatant *Combatant, target *Combatant) {
+func moveToward(cs *CombatState, combatant *Combatant, target *Combatant, rng *rand.Rand) {
 	movesLeft := MonsterMovementRange
 
 	for movesLeft > 0 {
-		bestX, bestY := combatant.GridX, combatant.GridY
 		bestDist := ChebyshevDistance(combatant.GridX, combatant.GridY, target.GridX, target.GridY)
+		var candidates []GridPos
 
 		// Check all 8 neighbors
 		for dy := -1; dy <= 1; dy++ {
@@ -161,17 +161,21 @@ func moveToward(cs *CombatState, combatant *Combatant, target *Combatant) {
 				dist := ChebyshevDistance(nx, ny, target.GridX, target.GridY)
 				if dist < bestDist {
 					bestDist = dist
-					bestX, bestY = nx, ny
+					candidates = []GridPos{{X: nx, Y: ny}}
+				} else if dist == bestDist && len(candidates) > 0 {
+					candidates = append(candidates, GridPos{X: nx, Y: ny})
 				}
 			}
 		}
 
 		// If we can't get closer, stop
-		if bestX == combatant.GridX && bestY == combatant.GridY {
+		if len(candidates) == 0 {
 			break
 		}
 
-		cs.PlaceOnGrid(combatant, bestX, bestY)
+		// Pick randomly among equally good moves
+		chosen := candidates[rng.Intn(len(candidates))]
+		cs.PlaceOnGrid(combatant, chosen.X, chosen.Y)
 		movesLeft--
 
 		// Stop if adjacent to target

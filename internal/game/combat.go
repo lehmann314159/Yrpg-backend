@@ -352,13 +352,15 @@ func MonsterAttack(cs *CombatState, attacker *Combatant, target *Combatant,
 
 // --- Charge ---
 
-// FindChargeDestination finds the closest unoccupied cell adjacent to the target
+// FindChargeDestination finds the best unoccupied cell adjacent to the target
 // within maxRange Chebyshev distance from the attacker. Returns (x, y, ok).
-// Ties: prefer lower Y then lower X.
+// Prefers same column as target, then same side as attacker started on,
+// then any reachable cell. Within each tier, picks the closest cell.
 func FindChargeDestination(cs *CombatState, attacker, target *Combatant, maxRange int) (int, int, bool) {
-	bestX, bestY := -1, -1
-	bestDist := 999
-	found := false
+	type candidate struct {
+		x, y, dist, tier int
+	}
+	var candidates []candidate
 
 	for dy := -1; dy <= 1; dy++ {
 		for dx := -1; dx <= 1; dx++ {
@@ -377,15 +379,35 @@ func FindChargeDestination(cs *CombatState, attacker, target *Combatant, maxRang
 			if dist > maxRange {
 				continue
 			}
-			if dist < bestDist || (dist == bestDist && (ny < bestY || (ny == bestY && nx < bestX))) {
-				bestDist = dist
-				bestX, bestY = nx, ny
-				found = true
+
+			// Tier 0: same column (directly above/below target)
+			// Tier 1: same side as attacker started on
+			// Tier 2: opposite side
+			tier := 2
+			if nx == target.GridX {
+				tier = 0
+			} else if (attacker.GridX <= target.GridX && nx < target.GridX) ||
+				(attacker.GridX >= target.GridX && nx > target.GridX) {
+				tier = 1
 			}
+
+			candidates = append(candidates, candidate{nx, ny, dist, tier})
 		}
 	}
 
-	return bestX, bestY, found
+	if len(candidates) == 0 {
+		return -1, -1, false
+	}
+
+	// Pick the best: lowest tier, then shortest distance
+	best := candidates[0]
+	for _, c := range candidates[1:] {
+		if c.tier < best.tier || (c.tier == best.tier && c.dist < best.dist) {
+			best = c
+		}
+	}
+
+	return best.x, best.y, true
 }
 
 // --- Engagement ---
